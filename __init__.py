@@ -2,8 +2,10 @@
 
 Nodes (category "Magnific"):
   * MagnificImageGenerate  — text-to-image (Mystic)
+  * MagnificTextToImage    — text-to-image (Flux, Seedream, Z-Image, Hyperflux, Runway)
+  * MagnificImageEdit      — style transfer, Kontext edit, relight, remove bg, expand, ...
   * MagnificUpscale        — creative & precise upscaling
-  * MagnificVideoGenerate  — text-to-video & image-to-video (Kling, Veo, Seedance, ...)
+  * MagnificVideoGenerate  — text-to-video & image-to-video (Kling, Seedance, Hailuo, ...)
   * MagnificReferenceCreate — Soul-style character/style reference packaging
   * MagnificTTS            — text-to-speech (ElevenLabs voiceover)
 

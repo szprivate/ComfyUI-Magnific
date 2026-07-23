@@ -253,7 +253,10 @@ class MagnificClient:
 
     @staticmethod
     def _status(data: dict) -> str:
-        return str(data.get("status") or data.get("state") or "").upper()
+        # Endpoints are inconsistent: most use "status", style-transfer uses
+        # "task_status"; accept either (plus "state") so polling never stalls.
+        return str(data.get("status") or data.get("state")
+                   or data.get("task_status") or "").upper()
 
     def submit(self, path: str, body: dict) -> dict:
         """POST the task; return the ``data`` block (has ``task_id`` + ``status``)."""
@@ -338,7 +341,8 @@ class MagnificClient:
             if isinstance(v, str) and v.startswith("http"):
                 out.append(v)
             elif isinstance(v, dict):
-                for k in ("url", "image_url", "video_url", "audio_url", "download_url"):
+                for k in ("high_resolution", "url", "image_url", "video_url",
+                          "audio_url", "download_url"):
                     if isinstance(v.get(k), str) and v[k].startswith("http"):
                         out.append(v[k])
                         break
@@ -351,12 +355,51 @@ class MagnificClient:
             _add(gen)
 
         if not out:
-            for key in ("result", "output", "url", "audio", "video"):
+            for key in ("high_resolution", "result", "output", "url", "audio", "video"):
                 _add(data.get(key))
 
         # De-dup, keep order.
         seen: set[str] = set()
         return [u for u in out if not (u in seen or seen.add(u))]
+
+    def post_form_sync(self, path: str, data: dict) -> list[str]:
+        """POST a form-encoded, *synchronous* endpoint and return result URL(s).
+
+        A few endpoints (e.g. beta/remove-background) don't use the async task
+        contract: they take ``application/x-www-form-urlencoded`` and return the
+        finished asset URL(s) directly. Shares the 429/5xx backoff of ``_request``.
+        """
+        headers = {self.header: self.api_key, "Accept": "application/json"}
+        last_exc: Optional[Exception] = None
+        for attempt in range(self.max_retries):
+            try:
+                resp = self._session.post(
+                    self._url(path), headers=headers, data=data,
+                    timeout=max(self.request_timeout, 120),
+                )
+            except requests.RequestException as exc:
+                last_exc = exc
+                time.sleep(min(2 ** attempt, 10))
+                continue
+            if (resp.status_code == 429 or resp.status_code >= 500) and attempt < self.max_retries - 1:
+                time.sleep(min(2 ** attempt, 15))
+                continue
+            self._raise_for_status(resp, f"POST {path}")
+            try:
+                body = resp.json()
+            except Exception as exc:  # noqa: BLE001
+                raise MagnificAPIError(
+                    f"POST {path}: response was not JSON: {(resp.text or '')[:300]}"
+                ) from exc
+            urls = self.extract_urls(self._data(body))
+            if not urls:
+                raise MagnificAPIError(
+                    f"POST {path}: no result URL in response: {str(body)[:300]}"
+                )
+            return urls
+        raise MagnificAPIError(
+            f"POST {path}: giving up after {self.max_retries} attempts ({last_exc})"
+        )
 
     # -- downloads -------------------------------------------------------------
     def download_bytes(self, url: str) -> bytes:

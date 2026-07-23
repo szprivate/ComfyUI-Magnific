@@ -13,6 +13,8 @@ mirroring the Magnific MCP tool set as native ComfyUI nodes.
 | Node | Endpoint | Output |
 |------|----------|--------|
 | **Magnific Image Generate (Mystic)** | `POST /v1/ai/mystic` | `IMAGE`, `image_urls` |
+| **Magnific Text-to-Image** | `POST /v1/ai/text-to-image/<model>` (Flux, Seedream, Z-Image, Hyperflux, Runway) | `IMAGE`, `image_urls` |
+| **Magnific Image Edit** | style transfer, Kontext edit, relight, remove bg, expand, reimagine | `IMAGE`, `image_urls` |
 | **Magnific Upscale** | `POST /v1/ai/image-upscaler` (creative) / `…/image-upscaler-precision` (precise) | `IMAGE`, `image_url` |
 | **Magnific Video Generate** | `POST /v1/ai/{image,text}-to-video/<model>` | `video_path`, `video_url` |
 | **Magnific Reference Create (Soul)** | *(local — packages a reference image)* | `MAGNIFIC_REFERENCE` |
@@ -49,6 +51,38 @@ in this order:
 Set `provider` on each node to `magnific` (→ `api.magnific.com`, header
 `x-magnific-api-key`) or `freepik` (→ `api.freepik.com`, header
 `x-freepik-api-key`). Both env vars work for either provider.
+
+## Model coverage & verification status
+
+Paths below were verified against real curl examples / the API reference.
+**Path** = the endpoint is confirmed; **Params** = the request body fields the node
+sends are confirmed. Where params are *best-effort*, the path is right and the common
+fields are sent — pass anything model-specific via `extra_params_json`.
+
+| Category | Models | Path | Params |
+|----------|--------|------|--------|
+| Image (Mystic) | `mystic` | ✅ | ✅ |
+| Image (text-to-image) | `flux-dev`, `flux-pro-v1-1`, `flux-2-pro/turbo/klein`, `hyperflux`, `seedream`, `seedream-4`, `seedream-v4-5`, `z-image-turbo`, `runway`, `classic` | ✅ | ⚠️ prompt/aspect_ratio/seed sent; rest via `extra_params_json` |
+| Image edit | `style-transfer`, `flux-kontext-pro`, `remove-background` | ✅ | ✅ |
+| Image edit | `relight`, `reimagine-flux`, `seedream-v4-5-edit`, `image-expand` | ✅ | ⚠️ best-effort |
+| Upscale | `image-upscaler` (creative), `image-upscaler-precision` | ✅ | ✅ |
+| Video i2v | `kling-v2-6-pro` | ✅ | ✅ |
+| Video i2v | `seedance-pro-1080p` | ✅ | ✅ |
+| Video i2v | `kling-v2-5/2-1-pro`, `kling-o1-pro`, `kling-motion`, `minimax-hailuo-2-3/02`, `minimax-video-01-live`, `pixverse`, `wan-2-5-i2v`, `wan-v2-6`, `runway-gen4-turbo` | ✅ | ⚠️ common fields; rest via `extra_params_json` |
+| Video t2v | `wan-2-5-t2v-1080p`, `ltx-2-pro` | ✅ | ⚠️ common fields |
+| Audio | `voiceover` (TTS) | ✅ | ✅ |
+
+**Notable per-endpoint quirks the nodes already handle:**
+- `flux-kontext-pro` and `remove-background` accept an image **URL only** (not base64) —
+  set `image_url`; the node errors clearly if you pass only a tensor.
+- `remove-background` is **synchronous** and form-encoded (no task polling) — handled
+  via a dedicated sync path.
+- `style-transfer` reports progress under `task_status` (not `status`) — the poller
+  reads both, so it won't stall.
+
+Not yet wired as nodes (available to add): music generation (`/v1/ai/music-generation`),
+sound effects (`/v1/ai/sound-effects`), audio isolation (`/v1/ai/audio-isolation`), and
+the video-effects/avatar endpoints (`vfx`, `omni-human-1-5`, `runway-act-two`).
 
 ## Example workflow
 
