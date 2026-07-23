@@ -16,9 +16,12 @@ mirroring the Magnific MCP tool set as native ComfyUI nodes.
 | **Magnific Text-to-Image** | `POST /v1/ai/text-to-image/<model>` (Flux, Seedream, Z-Image, Hyperflux, Runway) | `IMAGE`, `image_urls` |
 | **Magnific Image Edit** | style transfer, Kontext edit, relight, remove bg, expand, reimagine | `IMAGE`, `image_urls` |
 | **Magnific Upscale** | `POST /v1/ai/image-upscaler` (creative) / `…/image-upscaler-precision` (precise) | `IMAGE`, `image_url` |
-| **Magnific Video Generate** | `POST /v1/ai/{image,text}-to-video/<model>` | `video_path`, `video_url` |
+| **Magnific Video Generate** | `POST /v1/ai/{image,text}-to-video/<model>` (Kling 2.x, Seedance, Hailuo, Wan, PixVerse, Runway, LTX) | `video_path`, `video_url` |
+| **Magnific Video Advanced** | `POST /v1/ai/video/<model>` — Kling 3, Kling 3 Omni, OmniHuman 1.5, Act-Two, VFX | `video_path`, `video_url` |
 | **Magnific Reference Create (Soul)** | *(local — packages a reference image)* | `MAGNIFIC_REFERENCE` |
 | **Magnific Text-to-Speech** | `POST /v1/ai/voiceover` | `audio_path`, `audio_url` |
+| **Magnific Audio Generate** | `POST /v1/ai/music-generation` / `…/sound-effects` | `audio_path`, `audio_url` |
+| **Magnific Audio Isolation** | `POST /v1/ai/audio-isolation` | `audio_path`, `audio_url` |
 
 Every generation endpoint is **asynchronous**: the node submits a task, polls
 `GET /v1/ai/<endpoint>/{task_id}` until the status is `COMPLETED` (or `FAILED`),
@@ -70,7 +73,19 @@ fields are sent — pass anything model-specific via `extra_params_json`.
 | Video i2v | `seedance-pro-1080p` | ✅ | ✅ |
 | Video i2v | `kling-v2-5/2-1-pro`, `kling-o1-pro`, `kling-motion`, `minimax-hailuo-2-3/02`, `minimax-video-01-live`, `pixverse`, `wan-2-5-i2v`, `wan-v2-6`, `runway-gen4-turbo` | ✅ | ⚠️ common fields; rest via `extra_params_json` |
 | Video t2v | `wan-2-5-t2v-1080p`, `ltx-2-pro` | ✅ | ⚠️ common fields |
-| Audio | `voiceover` (TTS) | ✅ | ✅ |
+| Video (v3 group) | `kling-v3-pro`, `omni-human-1-5` | ✅ | ✅ |
+| Video (v3 group) | `kling-v3-omni-pro`, `kling-v3-omni-std`, `runway-act-two`, `vfx` | ✅ | ⚠️ best-effort |
+| Audio | `voiceover` (TTS), `music-generation`, `audio-isolation` | ✅ | ✅ |
+| Audio | `sound-effects` | ✅ | ⚠️ best-effort |
+
+**Newer models:**
+- **Kling 3.0 / Kling 3 Omni** — available via `MagnificVideoAdvanced` (`kling-v3-pro`,
+  `kling-v3-omni-pro`, `kling-v3-omni-std`). They use a different schema from Kling 2.x
+  (URL-based `start_image_url`/`end_image_url`, `16:9`-style aspect ratio, 3–15s), which
+  is why they live in a separate node.
+- **Seedance 2.0** — a Magnific *product*, but **not exposed as an API endpoint** at the
+  time of writing (only `seedance-pro-1080p` is in the API). Not wired; when/if it ships
+  an endpoint it drops into `VIDEO_MODELS`.
 
 **Notable per-endpoint quirks the nodes already handle:**
 - `flux-kontext-pro` and `remove-background` accept an image **URL only** (not base64) —
@@ -80,9 +95,9 @@ fields are sent — pass anything model-specific via `extra_params_json`.
 - `style-transfer` reports progress under `task_status` (not `status`) — the poller
   reads both, so it won't stall.
 
-Not yet wired as nodes (available to add): music generation (`/v1/ai/music-generation`),
-sound effects (`/v1/ai/sound-effects`), audio isolation (`/v1/ai/audio-isolation`), and
-the video-effects/avatar endpoints (`vfx`, `omni-human-1-5`, `runway-act-two`).
+All catalogued generative endpoints are now wired. The remaining API surface is
+non-generative (stock content search, team/usage analytics) and out of scope for a
+generation node pack.
 
 ## Example workflow
 

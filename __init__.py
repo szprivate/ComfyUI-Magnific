@@ -5,9 +5,12 @@ Nodes (category "Magnific"):
   * MagnificTextToImage    — text-to-image (Flux, Seedream, Z-Image, Hyperflux, Runway)
   * MagnificImageEdit      — style transfer, Kontext edit, relight, remove bg, expand, ...
   * MagnificUpscale        — creative & precise upscaling
-  * MagnificVideoGenerate  — text-to-video & image-to-video (Kling, Seedance, Hailuo, ...)
+  * MagnificVideoGenerate  — image/text-to-video (Kling 2.x, Seedance, Hailuo, Wan, ...)
+  * MagnificVideoAdvanced  — Kling 3 / Omni, OmniHuman, Act-Two, VFX (/v1/ai/video/)
   * MagnificReferenceCreate — Soul-style character/style reference packaging
   * MagnificTTS            — text-to-speech (ElevenLabs voiceover)
+  * MagnificAudioGenerate  — music & sound effects
+  * MagnificAudioIsolation — isolate a described sound from audio/video
 
 Auth: node 'api_key' widget, else MAGNIFIC_API_KEY / FREEPIK_API_KEY env var,
 else a *_api_key.txt file next to this pack.
