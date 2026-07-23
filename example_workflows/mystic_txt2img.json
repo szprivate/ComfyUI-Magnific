@@ -1,0 +1,137 @@
+{
+  "id": "b1a7c0de-0001-4a10-9f00-magnificmystic01",
+  "revision": 0,
+  "last_node_id": 3,
+  "last_link_id": 1,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "MagnificImageGenerate",
+      "pos": [
+        320,
+        180
+      ],
+      "size": [
+        420,
+        420
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "structure_reference",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "style_reference",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "reference",
+          "type": "MAGNIFIC_REFERENCE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "slot_index": 0,
+          "links": [
+            1
+          ]
+        },
+        {
+          "name": "image_urls",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MagnificImageGenerate"
+      },
+      "widgets_values": [
+        "magnific",
+        "",
+        "a serene alpine lake at golden hour, snow-capped peaks reflected in still water, ultra-detailed, photorealistic",
+        "realism",
+        "2k",
+        "widescreen_16_9",
+        "automatic",
+        33,
+        50,
+        true,
+        false,
+        0
+      ]
+    },
+    {
+      "id": 2,
+      "type": "PreviewImage",
+      "pos": [
+        800,
+        180
+      ],
+      "size": [
+        400,
+        420
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 1
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 3,
+      "type": "MarkdownNote",
+      "pos": [
+        320,
+        -140
+      ],
+      "size": [
+        880,
+        260
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "# ComfyUI-Magnific — Mystic text-to-image\n\nMinimal example: **Magnific Image Generate (Mystic)** → **Preview Image**.\n\n### Setup\n1. Install: `git clone` this repo into `ComfyUI/custom_nodes`, then `pip install -r requirements.txt` and restart ComfyUI.\n2. **API key** — do one of:\n   - paste it into the node's `api_key` field, **or**\n   - set the `MAGNIFIC_API_KEY` (or `FREEPIK_API_KEY`) environment variable, **or**\n   - create `magnific_api_key.txt` next to the pack.\n3. Pick `provider` = `magnific` (api.magnific.com) or `freepik` (api.freepik.com). Both keys work for either host.\n4. Edit the prompt and press **Queue**. The node submits the Mystic task, polls until it is COMPLETED, and outputs the image(s).\n\n### Try next\n- Feed the `images` output into **Magnific Upscale** (creative or precise).\n- Add **Magnific Reference Create (Soul)** → connect its `reference` output to this node's `reference` input for style/character guidance.\n\nDocs: https://docs.magnific.com  ·  https://docs.freepik.com"
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

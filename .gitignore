@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# API keys — never commit these
+magnific_api_key.txt
+freepik_api_key.txt
+
+# Local outputs
+output/
