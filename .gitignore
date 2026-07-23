@@ -4,9 +4,10 @@ __pycache__/
 *.egg-info/
 .venv/
 
-# API keys — never commit these
+# API keys / OAuth tokens — never commit these
 magnific_api_key.txt
 freepik_api_key.txt
+.mcp_tokens/
 
 # Local outputs
 output/

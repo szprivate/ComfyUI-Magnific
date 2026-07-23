@@ -11,6 +11,8 @@ Nodes (category "Magnific"):
   * MagnificTTS            — text-to-speech (ElevenLabs voiceover)
   * MagnificAudioGenerate  — music & sound effects
   * MagnificAudioIsolation — isolate a described sound from audio/video
+  * MagnificMCPVideo       — newer models via the Magnific MCP (Seedance 2.0, Sora 2,
+                             Kling 3, ...); OAuth, run authorize_magnific.py once
 
 Auth: node 'api_key' widget, else MAGNIFIC_API_KEY / FREEPIK_API_KEY env var,
 else a *_api_key.txt file next to this pack.

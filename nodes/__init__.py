@@ -21,4 +21,13 @@ for _mod in (image_generate, text_to_image, image_edit, upscale, video_generate,
     NODE_CLASS_MAPPINGS.update(_mod.NODE_CLASS_MAPPINGS)
     NODE_DISPLAY_NAME_MAPPINGS.update(_mod.NODE_DISPLAY_NAME_MAPPINGS)
 
+# The MCP node is optional (OAuth + the `mcp` package). Register it defensively so
+# a missing dep or import hiccup never takes down the REST nodes above.
+try:
+    from . import mcp_video
+    NODE_CLASS_MAPPINGS.update(mcp_video.NODE_CLASS_MAPPINGS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(mcp_video.NODE_DISPLAY_NAME_MAPPINGS)
+except Exception as _exc:  # noqa: BLE001
+    print(f"[ComfyUI-Magnific] MCP video node not loaded ({_exc}); REST nodes unaffected.")
+
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

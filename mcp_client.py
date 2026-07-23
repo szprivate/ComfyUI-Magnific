@@ -1,0 +1,355 @@
+"""Self-contained OAuth client for the Magnific MCP server (mcp.magnific.com).
+
+The REST API this pack mostly wraps only exposes a curated subset of models. The
+Magnific **MCP** offers a much larger, more current catalog (Seedance 2.0, Sora 2,
+Veo 3.1, ...) via a generic ``video_generate`` tool whose model is a ``slug``. This
+module lets the MagnificMCPVideo node reach those models.
+
+Auth is OAuth 2.0 (no API key). It is a one-time interactive step — run
+``authorize_magnific.py`` once to sign in via the browser; tokens are stored in
+``<pack>/.mcp_tokens/`` (gitignored) and refreshed silently thereafter. This is the
+pack's **own** OAuth registration — it does not read any other app's tokens.
+
+``mcp`` is imported lazily inside functions so the rest of the pack (the REST
+nodes) loads fine even when ``mcp`` isn't installed; the MCP node then raises a
+clear "pip install mcp" error only if actually used.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+import threading
+import time
+import webbrowser
+from pathlib import Path
+from typing import Callable, Optional
+
+MCP_URL = "https://mcp.magnific.com"
+PACK_DIR = Path(__file__).resolve().parent
+TOKEN_DIR = PACK_DIR / ".mcp_tokens"
+REDIRECT_PORT = 8207  # this pack's own OAuth redirect port
+
+_DONE = {"done", "completed", "complete", "succeeded", "success", "finished", "ready", "generated"}
+_FAIL = {"failed", "error", "errored", "cancelled", "canceled", "rejected"}
+_VIDEO_EXT = (".mp4", ".webm", ".mov", ".m4v", ".mkv", ".gif")
+_MEDIA_EXT = _VIDEO_EXT + (".png", ".jpg", ".jpeg", ".webp", ".mp3", ".wav")
+_URL_RE = re.compile(r"https?://[^\s\"'<>)\]]+", re.IGNORECASE)
+
+
+class MCPError(RuntimeError):
+    """MCP call failed (tool error, bad response, or task failure)."""
+
+
+class MCPAuthError(MCPError):
+    """No usable token — run authorize_magnific.py first (or re-run to refresh)."""
+
+
+class MCPNotInstalled(MCPError):
+    """The `mcp` package isn't installed in this Python environment."""
+
+
+class MCPTimeout(MCPError):
+    """The generation didn't finish within max_wait."""
+
+
+def _require_mcp():
+    try:
+        import mcp  # noqa: F401
+    except Exception as exc:  # noqa: BLE001
+        raise MCPNotInstalled(
+            "The 'mcp' package is required for the Magnific MCP node. Install it into "
+            "ComfyUI's Python: pip install mcp"
+        ) from exc
+
+
+def has_tokens() -> bool:
+    return (TOKEN_DIR / "magnific.token.json").exists()
+
+
+# ── OAuth token storage (disk, this pack's own dir) ───────────────────────────
+def _make_token_storage():
+    from mcp.client.auth import TokenStorage
+    from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+
+    tok_path = TOKEN_DIR / "magnific.token.json"
+    cli_path = TOKEN_DIR / "magnific.client.json"
+
+    class _DiskTokenStorage(TokenStorage):
+        async def get_tokens(self):
+            if not tok_path.exists():
+                return None
+            try:
+                return OAuthToken.model_validate_json(tok_path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                return None
+
+        async def set_tokens(self, tokens) -> None:
+            TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+            tok_path.write_text(tokens.model_dump_json(), encoding="utf-8")
+
+        async def get_client_info(self):
+            if not cli_path.exists():
+                return None
+            try:
+                return OAuthClientInformationFull.model_validate_json(cli_path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                return None
+
+        async def set_client_info(self, info) -> None:
+            TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+            cli_path.write_text(info.model_dump_json(), encoding="utf-8")
+
+    return _DiskTokenStorage()
+
+
+def _make_provider(interactive: bool, holder: Optional[dict]):
+    from mcp.client.auth import OAuthClientProvider
+    from mcp.shared.auth import OAuthClientMetadata
+
+    metadata = OAuthClientMetadata(
+        client_name="ComfyUI-Magnific",
+        redirect_uris=[f"http://localhost:{REDIRECT_PORT}/callback"],
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+    )
+
+    async def redirect_handler(authorization_url: str) -> None:
+        if not interactive:
+            raise MCPAuthError(
+                "Magnific MCP not authorized (or token expired). Run "
+                "authorize_magnific.py once to sign in."
+            )
+        try:
+            webbrowser.open(authorization_url)
+        except Exception:  # noqa: BLE001
+            pass
+        print(f"\n[ComfyUI-Magnific] Authorize in your browser:\n  {authorization_url}\n")
+
+    async def callback_handler():
+        if not interactive or holder is None:
+            raise MCPAuthError("interactive OAuth callback not available")
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, holder["event"].wait, 300)
+        code = holder.get("code")
+        if not code:
+            raise MCPError("OAuth callback timed out or returned no code")
+        return code, holder.get("state")
+
+    return OAuthClientProvider(
+        server_url=MCP_URL,
+        client_metadata=metadata,
+        storage=_make_token_storage(),
+        redirect_handler=redirect_handler,
+        callback_handler=callback_handler,
+    )
+
+
+def _start_callback_server(port: int) -> dict:
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import urlparse, parse_qs
+
+    holder: dict = {"event": threading.Event()}
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            q = parse_qs(urlparse(self.path).query)
+            holder["code"] = (q.get("code") or [None])[0]
+            holder["state"] = (q.get("state") or [None])[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<h2>ComfyUI-Magnific: Magnific authorized.</h2>"
+                             b"<p>You can close this tab and return to ComfyUI.</p>")
+            holder["event"].set()
+
+        def log_message(self, *a):  # silence
+            return
+
+    srv = HTTPServer(("127.0.0.1", port), _Handler)
+    holder["server"] = srv
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return holder
+
+
+# ── async core ─────────────────────────────────────────────────────────────
+async def _with_session(op: Callable, *, interactive=False, holder=None):
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
+    provider = _make_provider(interactive, holder)
+    async with streamablehttp_client(MCP_URL, auth=provider) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return await op(session)
+
+
+async def _call(session, name: str, args: dict):
+    res = await session.call_tool(name, args)
+    texts = []
+    for block in getattr(res, "content", None) or []:
+        t = getattr(block, "text", None)
+        if t:
+            texts.append(str(t))
+    text = "\n".join(texts)
+    parsed = None
+    stripped = text.strip()
+    if stripped[:1] in ("{", "["):
+        try:
+            parsed = json.loads(stripped)
+        except Exception:  # noqa: BLE001
+            parsed = None
+    return text, parsed, bool(getattr(res, "isError", False))
+
+
+# ── response parsing (creations are key:value text or json) ──────────────────
+def _parse_kv_text(text: str) -> Optional[dict]:
+    if not text or not isinstance(text, str):
+        return None
+    out: dict = {}
+    for line in text.splitlines():
+        if not line or line[0] in (" ", "\t") or ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        key = key.strip()
+        if not key or " " in key or key in out:
+            continue
+        out[key] = val.strip().strip('"').strip()
+    return out or None
+
+
+def _extract_identifier(js, text: str) -> Optional[str]:
+    if isinstance(js, dict):
+        cr = js.get("creations")
+        if isinstance(cr, list) and cr and isinstance(cr[0], dict):
+            ident = cr[0].get("identifier") or cr[0].get("id")
+            if ident:
+                return str(ident)
+        if js.get("identifier"):
+            return str(js["identifier"])
+    kv = _parse_kv_text(text)
+    if kv and kv.get("identifier"):
+        return kv["identifier"]
+    return None
+
+
+def _status_of(body) -> Optional[str]:
+    if isinstance(body, dict):
+        cr = body.get("creations")
+        if isinstance(cr, list) and cr and isinstance(cr[0], dict):
+            body = cr[0]
+        s = body.get("status") or body.get("state")
+        return str(s).lower() if s else None
+    return None
+
+
+def _asset_url(body) -> Optional[str]:
+    if not isinstance(body, dict):
+        return None
+    node = body
+    cr = body.get("creations")
+    if isinstance(cr, list) and cr and isinstance(cr[0], dict):
+        node = cr[0]
+    for k in ("url", "assetUrl", "asset_url", "videoUrl", "video_url", "outputUrl", "downloadUrl"):
+        v = node.get(k)
+        if isinstance(v, str) and v.lower().startswith("http") and "/app/creation/" not in v:
+            return v
+    # fallback: any media URL in the serialized body, excluding the viewer page
+    try:
+        blob = json.dumps(body)
+    except Exception:  # noqa: BLE001
+        blob = str(body)
+    for cand in _URL_RE.findall(blob):
+        low = cand.split("?", 1)[0].lower()
+        if low.endswith(_MEDIA_EXT) and "/app/creation/" not in cand and "thumb" not in low and "preview" not in low:
+            return cand
+    return None
+
+
+async def _op_video(session, slug, clip, poll_interval, max_wait, status_cb):
+    text, js, err = await _call(session, "video_generate", {"video": {"clips": [clip]}})
+    if err:
+        raise MCPError(f"video_generate failed: {text[:500]}")
+    ident = _extract_identifier(js, text)
+    if not ident:
+        raise MCPError(f"video_generate returned no creation identifier: {text[:400]}")
+    if status_cb:
+        status_cb(f"queued {ident}")
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        await asyncio.sleep(poll_interval)
+        t2, j2, _e2 = await _call(session, "creations_get", {"creationIdentifier": ident})
+        body = j2 or _parse_kv_text(t2) or {}
+        status = _status_of(body)
+        url = _asset_url(body)
+        if status_cb:
+            status_cb(f"{status or '...'} {ident}")
+        if status in _FAIL:
+            raise MCPError(f"creation {ident} failed (status={status})")
+        if status in _DONE and url:
+            return [url]
+        if status in _DONE and not url:
+            raise MCPError(f"creation {ident} done but no asset URL: {t2[:300]}")
+    raise MCPTimeout(f"creation {ident} not finished after {max_wait:.0f}s")
+
+
+# ── public sync API ───────────────────────────────────────────────────────
+def authorize() -> list[str]:
+    """Interactive one-time OAuth sign-in; returns the MCP tool names on success."""
+    _require_mcp()
+    holder = _start_callback_server(REDIRECT_PORT)
+    try:
+        async def _op(session):
+            tools = await session.list_tools()
+            return [t.name for t in tools.tools]
+        return asyncio.run(_with_session(_op, interactive=True, holder=holder))
+    finally:
+        srv = holder.get("server")
+        if srv is not None:
+            try:
+                srv.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def generate_video(slug: str, clip: dict, *, poll_interval: float = 6.0,
+                   max_wait: float = 1800.0, status_cb: Optional[Callable[[str], None]] = None) -> list[str]:
+    """Submit a video_generate clip via the MCP, poll to completion, return URL(s)."""
+    _require_mcp()
+    if not has_tokens():
+        raise MCPAuthError(
+            "Magnific MCP not authorized. Run 'python authorize_magnific.py' in the "
+            "ComfyUI-Magnific folder once to sign in."
+        )
+    return asyncio.run(_with_session(
+        lambda s: _op_video(s, slug, clip, poll_interval, max_wait, status_cb)
+    ))
+
+
+def download_to_output(url: str, prefix: str, ext_hint: str = ".mp4") -> str:
+    """Download a result URL into ComfyUI's output dir; return the absolute path."""
+    import os
+    import requests
+
+    try:
+        import folder_paths  # type: ignore
+
+        out_dir = Path(folder_paths.get_output_directory())
+    except Exception:  # noqa: BLE001
+        out_dir = PACK_DIR / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = os.path.splitext(url.split("?", 1)[0])[1].lower() or ext_hint
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    idx = 0
+    while True:
+        name = f"{prefix}_{stamp}{'' if idx == 0 else f'_{idx}'}{ext}"
+        dest = out_dir / name
+        if not dest.exists():
+            break
+        idx += 1
+    resp = requests.get(url, timeout=180)
+    resp.raise_for_status()
+    dest.write_bytes(resp.content)
+    print(f"[ComfyUI-Magnific] Saved MCP result -> {dest}")
+    return str(dest)

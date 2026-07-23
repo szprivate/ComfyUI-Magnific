@@ -22,6 +22,7 @@ mirroring the Magnific MCP tool set as native ComfyUI nodes.
 | **Magnific Text-to-Speech** | `POST /v1/ai/voiceover` | `audio_path`, `audio_url` |
 | **Magnific Audio Generate** | `POST /v1/ai/music-generation` / `…/sound-effects` | `audio_path`, `audio_url` |
 | **Magnific Audio Isolation** | `POST /v1/ai/audio-isolation` | `audio_path`, `audio_url` |
+| **Magnific MCP Video** | Magnific **MCP** `video_generate` (OAuth) — Seedance 2.0, Sora 2, Kling 3, Veo 3.1 | `video_path`, `video_url` |
 
 Every generation endpoint is **asynchronous**: the node submits a task, polls
 `GET /v1/ai/<endpoint>/{task_id}` until the status is `COMPLETED` (or `FAILED`),
@@ -123,10 +124,35 @@ yet** and therefore cannot be wired here. Most relevant:
 Note the REST `seedance-pro-1080p` is an **older** Seedance (the MCP lists 1.5 and 2.0 as
 distinct slugs) — not the same model as MCP "Seedance 2.0".
 
-**If you need a REST-only-missing model today, use the Magnific MCP path** (e.g.
-`video_generate` with `slug: "bytedance-seedance-pro-2.0"`), not this pack. New models
-generally reach the REST API later; when a REST slug appears it drops straight into
-`VIDEO_MODELS` (`nodes/video_generate.py`) or `ADV_MODELS` (`nodes/video_advanced.py`).
+**To use these REST-missing models, the `Magnific MCP Video` node bridges to the MCP**
+(see setup below). New models also reach the REST API eventually; when a REST slug
+appears it drops straight into `VIDEO_MODELS` (`nodes/video_generate.py`) or `ADV_MODELS`
+(`nodes/video_advanced.py`).
+
+### `Magnific MCP Video` node — setup
+
+This one node talks to the Magnific **MCP** (OAuth) instead of the REST API, so it can
+reach the full video catalog by `slug`. It is self-contained — its own OAuth
+registration and token store, no dependency on any other app.
+
+1. **Install `mcp`** into the same Python that runs ComfyUI: `pip install mcp`.
+   (The REST nodes don't need it; if it's missing, only this node is skipped.)
+2. **Authorize once** — from the pack folder, with ComfyUI's Python:
+   ```bash
+   python authorize_magnific.py
+   ```
+   A browser opens to sign in to Magnific; tokens are saved to `.mcp_tokens/`
+   (gitignored) and refreshed silently afterwards. Re-run if the node reports it needs
+   re-authorization.
+3. **Use the node** — pick a `model` slug (`bytedance-seedance-pro-2.0`, `kling-30`,
+   `openai-sora2-standard`, …, or `custom` + `slug_override`), set `prompt` / `duration` /
+   `aspect_ratio` / `resolution`, and optionally `start_image_url` for image-to-video.
+   Images are passed as **public URLs** (the MCP keyframes take a URL or creation id) —
+   a connected ComfyUI IMAGE isn't uploaded in this version.
+
+> Auth note: this node uses **OAuth**, unrelated to the `MAGNIFIC_API_KEY` / `FREEPIK_API_KEY`
+> used by the REST nodes. Allowed `duration` / `aspect_ratio` / `resolution` vary per model
+> — the MCP surfaces an error if a combo is invalid; pass extras via `extra_params_json`.
 
 ## Example workflow
 

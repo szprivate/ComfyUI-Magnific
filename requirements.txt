@@ -1,3 +1,7 @@
 # ComfyUI-Magnific runtime dependencies.
 # torch, numpy and Pillow already ship with ComfyUI; only `requests` is extra.
 requests>=2.28
+
+# Optional: only needed for the Magnific MCP node (MagnificMCPVideo), which reaches
+# newer models (Seedance 2.0, Sora 2, Kling 3) over OAuth. The REST nodes don't need it.
+mcp>=1.0
