@@ -83,9 +83,9 @@ fields are sent — pass anything model-specific via `extra_params_json`.
   `kling-v3-omni-pro`, `kling-v3-omni-std`). They use a different schema from Kling 2.x
   (URL-based `start_image_url`/`end_image_url`, `16:9`-style aspect ratio, 3–15s), which
   is why they live in a separate node.
-- **Seedance 2.0** — a Magnific *product*, but **not exposed as an API endpoint** at the
-  time of writing (only `seedance-pro-1080p` is in the API). Not wired; when/if it ships
-  an endpoint it drops into `VIDEO_MODELS`.
+- **Seedance 2.0** — available in the Magnific **MCP** but **not on the REST API** this
+  pack wraps (only an older `seedance-pro-1080p` endpoint exists). Not wired; see
+  [REST API vs the Magnific MCP](#rest-api-vs-the-magnific-mcp) below.
 
 **Notable per-endpoint quirks the nodes already handle:**
 - `flux-kontext-pro` and `remove-background` accept an image **URL only** (not base64) —
@@ -98,6 +98,35 @@ fields are sent — pass anything model-specific via `extra_params_json`.
 All catalogued generative endpoints are now wired. The remaining API surface is
 non-generative (stock content search, team/usage analytics) and out of scope for a
 generation node pack.
+
+## REST API vs the Magnific MCP
+
+This pack wraps the **REST API** (`api.freepik.com` / `api.magnific.com`, `x-*-api-key`).
+Magnific also ships a separate **MCP server** (`mcp.magnific.com`, OAuth) used by AI
+assistants — and the two are **not the same catalog**. They don't even share a shape: the
+REST API exposes each model as its own endpoint (`/v1/ai/…/<model>`), while the MCP has a
+single generic `video_generate` whose model is a **`slug`** chosen from a much larger,
+more up-to-date catalog (~49 video models vs the REST subset).
+
+So some models you can use in a Magnific/Freepik AI *assistant* have **no REST endpoint
+yet** and therefore cannot be wired here. Most relevant:
+
+| Model | Magnific MCP slug | REST endpoint (this pack) |
+|-------|-------------------|---------------------------|
+| **Seedance 2.0 / Fast / Mini** | `bytedance-seedance-pro-2.0`, `…-fast-2.0`, `…-mini-2.0` | ❌ none |
+| Seedance 1.5 Pro | `bytedance-seedance-pro-1.5` | ❌ none |
+| Seedance (older Pro) | — | ✅ `seedance-pro-1080p` |
+| Kling 3.0 / Omni / Turbo | `kling-30`, `kling-omni3`, `kling-30-turbo` | ✅ `kling-v3-pro` (+ partial) |
+| OpenAI Sora 2 / Pro | `openai-sora2-standard`, `openai-sora2-pro` | ❌ none |
+| Google Veo 3.1 | `google-veo3_1` | ❌ none |
+
+Note the REST `seedance-pro-1080p` is an **older** Seedance (the MCP lists 1.5 and 2.0 as
+distinct slugs) — not the same model as MCP "Seedance 2.0".
+
+**If you need a REST-only-missing model today, use the Magnific MCP path** (e.g.
+`video_generate` with `slug: "bytedance-seedance-pro-2.0"`), not this pack. New models
+generally reach the REST API later; when a REST slug appears it drops straight into
+`VIDEO_MODELS` (`nodes/video_generate.py`) or `ADV_MODELS` (`nodes/video_advanced.py`).
 
 ## Example workflow
 
