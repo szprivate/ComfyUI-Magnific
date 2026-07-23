@@ -9,8 +9,8 @@ One-time setup: run `python authorize_magnific.py` in the pack folder to sign in
 (browser). See mcp_client.py. `mcp` must be installed in ComfyUI's Python
 (`pip install mcp`).
 
-Images are passed as public URLs (MCP keyframes take a URL or creation id); a
-connected ComfyUI IMAGE isn't uploaded in this version — use start/end image URLs.
+Image-to-video: connect a ComfyUI IMAGE (uploaded to the MCP via
+request_upload -> PUT -> finalize) or give a public URL (a URL wins for that slot).
 """
 from __future__ import annotations
 
@@ -23,8 +23,15 @@ if str(_PACK_DIR) not in sys.path:
     sys.path.insert(0, str(_PACK_DIR))
 
 import mcp_client  # noqa: E402
+from freepik_api import tensor_to_base64_png  # noqa: E402
 
 CATEGORY = "Magnific"
+
+
+def _png_bytes(image):
+    """A ComfyUI IMAGE tensor -> raw PNG bytes (reuses the base64 encoder)."""
+    import base64
+    return base64.b64decode(tensor_to_base64_png(image))
 
 # Model slugs from the MCP video_models_list catalog (newer / REST-missing ones).
 # "custom" -> use the slug_override widget for anything not listed here.
@@ -63,8 +70,12 @@ class MagnificMCPVideo:
             "optional": {
                 "slug_override": ("STRING", {"default": "",
                                   "tooltip": "Exact slug from video_models_list; used when model=custom."}),
+                # Image-to-video: connect a ComfyUI IMAGE (uploaded to the MCP), or
+                # give a public URL. A URL wins over the tensor for the same slot.
+                "start_image": ("IMAGE",),
+                "end_image": ("IMAGE",),
                 "start_image_url": ("STRING", {"default": "",
-                                    "tooltip": "Public image URL for image-to-video (keyframe start)."}),
+                                    "tooltip": "Public image URL (keyframe start); overrides start_image."}),
                 "end_image_url": ("STRING", {"default": ""}),
                 "extra_params_json": ("STRING", {"default": "", "multiline": True,
                                       "tooltip": "Merged into the clip, e.g. {\"soundEffects\": true}."}),
@@ -80,15 +91,18 @@ class MagnificMCPVideo:
     OUTPUT_NODE = True
 
     def generate(self, model, prompt, duration, aspect_ratio, resolution,
-                 slug_override="", start_image_url="", end_image_url="",
+                 slug_override="", start_image=None, end_image=None,
+                 start_image_url="", end_image_url="",
                  extra_params_json="", poll_interval=6.0, max_wait_seconds=1800):
         import json
 
         slug = slug_override.strip() if model == "custom" else model
         if not slug:
             raise ValueError("MagnificMCPVideo: model=custom needs a 'slug_override'.")
-        if not prompt.strip() and not start_image_url.strip():
-            raise ValueError("MagnificMCPVideo: provide a 'prompt' (and/or a 'start_image_url').")
+        has_start = bool(start_image_url.strip()) or start_image is not None
+        if not prompt.strip() and not has_start:
+            raise ValueError("MagnificMCPVideo: provide a 'prompt' and/or a start image "
+                             "(connect 'start_image' or set 'start_image_url').")
 
         clip: dict = {
             "slug": slug,
@@ -98,13 +112,6 @@ class MagnificMCPVideo:
         }
         if prompt.strip():
             clip["prompt"] = prompt
-        keyframes = {}
-        if start_image_url.strip():
-            keyframes["start"] = {"type": "image", "url": start_image_url.strip()}
-        if end_image_url.strip():
-            keyframes["end"] = {"type": "image", "url": end_image_url.strip()}
-        if keyframes:
-            clip["keyframes"] = keyframes
 
         if extra_params_json.strip():
             try:
@@ -115,11 +122,17 @@ class MagnificMCPVideo:
                 raise ValueError("MagnificMCPVideo: extra_params_json must be a JSON object.")
             clip.update(extra)
 
+        # A ComfyUI IMAGE is uploaded to the MCP; a URL (if given) wins for that slot.
+        start_bytes = _png_bytes(start_image) if (start_image is not None and not start_image_url.strip()) else None
+        end_bytes = _png_bytes(end_image) if (end_image is not None and not end_image_url.strip()) else None
+
         def _status(msg):
             print(f"[ComfyUI-Magnific] MCP/{slug}: {msg}")
 
         urls = mcp_client.generate_video(
             slug, clip,
+            start_url=start_image_url, end_url=end_image_url,
+            start_bytes=start_bytes, end_bytes=end_bytes,
             poll_interval=poll_interval, max_wait=max_wait_seconds, status_cb=_status,
         )
         video_path = mcp_client.download_to_output(urls[0], prefix=f"magnific_mcp_{slug}", ext_hint=".mp4")

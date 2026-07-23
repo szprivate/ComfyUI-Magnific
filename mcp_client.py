@@ -266,7 +266,53 @@ def _asset_url(body) -> Optional[str]:
     return None
 
 
-async def _op_video(session, slug, clip, poll_interval, max_wait, status_cb):
+async def _upload_image(session, png_bytes: bytes, status_cb) -> str:
+    """Upload PNG bytes and return a creation identifier usable as a keyframe url.
+
+    request_upload (presigned PUT target) -> HTTP PUT the raw bytes outside MCP ->
+    finalize_upload (temp path -> hidden creation).
+    """
+    import requests
+
+    if status_cb:
+        status_cb("uploading image")
+    text, js, err = await _call(session, "creations_request_upload", {"mimeType": "image/png"})
+    if err or not isinstance(js, dict):
+        raise MCPError(f"creations_request_upload failed: {text[:400]}")
+    put_url = js.get("proxyUploadUrl") or js.get("uploadUrl") or js.get("url")
+    path = js.get("path")
+    if not put_url or not path:
+        raise MCPError(f"request_upload missing proxyUploadUrl/path: {text[:400]}")
+
+    def _put():
+        r = requests.put(put_url, data=png_bytes,
+                         headers={"Content-Type": "image/png"}, timeout=180)
+        r.raise_for_status()
+
+    # PUT is a blocking HTTP call outside MCP — run it off the event loop.
+    await asyncio.get_event_loop().run_in_executor(None, _put)
+
+    t2, j2, e2 = await _call(session, "creations_finalize_upload",
+                             {"path": path, "visible": False})
+    if e2:
+        raise MCPError(f"creations_finalize_upload failed: {t2[:400]}")
+    ident = _extract_identifier(j2, t2) or _asset_url(j2 or {})
+    if not ident:
+        raise MCPError(f"finalize_upload returned no identifier/url: {t2[:400]}")
+    return ident
+
+
+async def _op_video(session, slug, clip, start_url, end_url, start_bytes, end_bytes,
+                    poll_interval, max_wait, status_cb):
+    # Resolve keyframes: a URL wins; otherwise upload the tensor bytes to a creation.
+    keyframes = dict(clip.get("keyframes") or {})
+    for role, url, data in (("start", start_url, start_bytes), ("end", end_url, end_bytes)):
+        ref = (url or "").strip() or (await _upload_image(session, data, status_cb) if data else "")
+        if ref:
+            keyframes[role] = {"type": "image", "url": ref}
+    if keyframes:
+        clip["keyframes"] = keyframes
+
     text, js, err = await _call(session, "video_generate", {"video": {"clips": [clip]}})
     if err:
         raise MCPError(f"video_generate failed: {text[:500]}")
@@ -312,9 +358,16 @@ def authorize() -> list[str]:
                 pass
 
 
-def generate_video(slug: str, clip: dict, *, poll_interval: float = 6.0,
-                   max_wait: float = 1800.0, status_cb: Optional[Callable[[str], None]] = None) -> list[str]:
-    """Submit a video_generate clip via the MCP, poll to completion, return URL(s)."""
+def generate_video(slug: str, clip: dict, *, start_url: str = "", end_url: str = "",
+                   start_bytes: Optional[bytes] = None, end_bytes: Optional[bytes] = None,
+                   poll_interval: float = 6.0, max_wait: float = 1800.0,
+                   status_cb: Optional[Callable[[str], None]] = None) -> list[str]:
+    """Submit a video_generate clip via the MCP, poll to completion, return URL(s).
+
+    Keyframe images may be given as public URLs (`start_url`/`end_url`) or as raw PNG
+    bytes (`start_bytes`/`end_bytes`) which are uploaded to a creation first. A URL
+    takes precedence over bytes for the same role.
+    """
     _require_mcp()
     if not has_tokens():
         raise MCPAuthError(
@@ -322,7 +375,8 @@ def generate_video(slug: str, clip: dict, *, poll_interval: float = 6.0,
             "ComfyUI-Magnific folder once to sign in."
         )
     return asyncio.run(_with_session(
-        lambda s: _op_video(s, slug, clip, poll_interval, max_wait, status_cb)
+        lambda s: _op_video(s, slug, clip, start_url, end_url, start_bytes, end_bytes,
+                            poll_interval, max_wait, status_cb)
     ))
 
 

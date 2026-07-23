@@ -146,9 +146,10 @@ registration and token store, no dependency on any other app.
    re-authorization.
 3. **Use the node** — pick a `model` slug (`bytedance-seedance-pro-2.0`, `kling-30`,
    `openai-sora2-standard`, …, or `custom` + `slug_override`), set `prompt` / `duration` /
-   `aspect_ratio` / `resolution`, and optionally `start_image_url` for image-to-video.
-   Images are passed as **public URLs** (the MCP keyframes take a URL or creation id) —
-   a connected ComfyUI IMAGE isn't uploaded in this version.
+   `aspect_ratio` / `resolution`. For image-to-video, connect a ComfyUI **IMAGE** to
+   `start_image` (and/or `end_image`) — it's uploaded to the MCP automatically
+   (`request_upload → PUT → finalize`) — or give a public `start_image_url` (a URL wins
+   over the tensor for that slot).
 
 > Auth note: this node uses **OAuth**, unrelated to the `MAGNIFIC_API_KEY` / `FREEPIK_API_KEY`
 > used by the REST nodes. Allowed `duration` / `aspect_ratio` / `resolution` vary per model
