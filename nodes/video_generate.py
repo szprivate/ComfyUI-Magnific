@@ -6,9 +6,16 @@ into ComfyUI's output folder and its path is returned (ComfyUI has no single
 native video tensor — a file path is the portable hand-off, e.g. into
 VideoHelperSuite's Load Video).
 
+Video models do NOT share one request schema, so the body is assembled per model
+*family* and filtered to that family's known parameters — a Kling-only field like
+``cfg_scale`` is never sent to Seedance (which would 422 on a strict validator),
+and Seedance's ``camera_fixed`` / ``frames_per_second`` / ``seed`` are only sent
+to Seedance. Confirmed against the docs for Kling and Seedance; other families
+send just the common fields and rely on ``extra_params_json`` for specifics.
+
 The model->endpoint map is the one brittle spot (Magnific occasionally renames
-slugs); it lives in VIDEO_MODELS below and an `endpoint_override` widget lets you
-paste an exact path without editing code.
+slugs); it lives in VIDEO_MODELS below and an ``endpoint_override`` widget lets
+you paste an exact path without editing code.
 """
 from __future__ import annotations
 
@@ -43,6 +50,46 @@ VIDEO_MODELS: dict[str, tuple[str, str]] = {
 DURATIONS = ["5", "10"]
 ASPECT_RATIOS = ["widescreen_16_9", "social_story_9_16", "square_1_1"]
 
+# Fields every video family accepts.
+COMMON_KEYS = ("prompt", "duration", "aspect_ratio")
+# Fields specific to a model family (confirmed from the Kling / Seedance docs).
+FAMILY_EXTRA_KEYS: dict[str, set[str]] = {
+    "kling": {"negative_prompt", "cfg_scale", "generate_audio"},
+    "seedance": {"camera_fixed", "frames_per_second", "seed"},
+    # minimax / pixverse / wan / runway / ltx: send common fields only; use
+    # extra_params_json for their model-specific parameters.
+}
+
+
+def model_family(model: str) -> str:
+    for fam in ("kling", "seedance", "minimax", "pixverse", "wan", "runway", "ltx"):
+        if model.startswith(fam):
+            return fam
+    if "hailuo" in model:
+        return "minimax"
+    return "generic"
+
+
+def build_video_body(model: str, kind: str, img_payload: str, values: dict) -> tuple[dict, str]:
+    """Assemble the request body with only the fields this model's family accepts.
+
+    Empty strings / None are dropped so we never send blank params. Returns
+    ``(body, family)``.
+    """
+    fam = model_family(model)
+    allowed = set(COMMON_KEYS) | FAMILY_EXTRA_KEYS.get(fam, set())
+    body: dict = {}
+    for key in allowed:
+        val = values.get(key)
+        if val is None:
+            continue
+        if isinstance(val, str) and not val.strip():
+            continue
+        body[key] = val
+    if kind == "i2v":
+        body["image"] = img_payload
+    return body, fam
+
 
 class MagnificVideoGenerate:
     """Generate video from text or from an image + prompt, across model families."""
@@ -56,14 +103,23 @@ class MagnificVideoGenerate:
                 "prompt": ("STRING", {"default": "", "multiline": True}),
                 "duration": (DURATIONS, {"default": "5"}),
                 "aspect_ratio": (ASPECT_RATIOS, {"default": "widescreen_16_9"}),
-                "cfg_scale": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
-                "generate_audio": ("BOOLEAN", {"default": False}),
             },
             "optional": {
                 # Required for image-to-video models; ignored for text-to-video.
                 "image": ("IMAGE",),
                 "image_url": ("STRING", {"default": ""}),
+                # Kling family
                 "negative_prompt": ("STRING", {"default": "", "multiline": True}),
+                "cfg_scale": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05,
+                                        "tooltip": "Kling family."}),
+                "generate_audio": ("BOOLEAN", {"default": False, "tooltip": "Kling family."}),
+                # Seedance family
+                "camera_fixed": ("BOOLEAN", {"default": False, "tooltip": "Seedance family."}),
+                "frames_per_second": ("INT", {"default": 24, "min": 1, "max": 60,
+                                              "tooltip": "Seedance family."}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF,
+                                 "tooltip": "Seedance family (0 = omit)."}),
+                # Escape hatches for doc drift / other families.
                 "endpoint_override": ("STRING", {"default": ""}),
                 "extra_params_json": ("STRING", {"default": "", "multiline": True}),
                 **polling_inputs(),
@@ -77,7 +133,8 @@ class MagnificVideoGenerate:
     OUTPUT_NODE = True
 
     def generate(self, provider, api_key, model, prompt, duration, aspect_ratio,
-                 cfg_scale, generate_audio, image=None, image_url="", negative_prompt="",
+                 image=None, image_url="", negative_prompt="", cfg_scale=0.5,
+                 generate_audio=False, camera_fixed=False, frames_per_second=24, seed=0,
                  endpoint_override="", extra_params_json="",
                  poll_interval=5.0, max_wait_seconds=1800):
         import json
@@ -95,17 +152,18 @@ class MagnificVideoGenerate:
         if kind == "t2v" and img_payload:
             print(f"[ComfyUI-Magnific] '{model}' is text-to-video; ignoring the image input.")
 
-        body: dict = {
+        values = {
             "prompt": prompt,
             "duration": duration,
             "aspect_ratio": aspect_ratio,
+            "negative_prompt": negative_prompt,
             "cfg_scale": cfg_scale,
             "generate_audio": generate_audio,
+            "camera_fixed": camera_fixed,
+            "frames_per_second": frames_per_second,
+            "seed": seed or None,  # 0 -> omit
         }
-        if kind == "i2v":
-            body["image"] = img_payload
-        if negative_prompt.strip():
-            body["negative_prompt"] = negative_prompt
+        body, fam = build_video_body(model, kind, img_payload, values)
 
         if extra_params_json.strip():
             try:
@@ -115,6 +173,10 @@ class MagnificVideoGenerate:
             if not isinstance(extra, dict):
                 raise ValueError("MagnificVideoGenerate: extra_params_json must be a JSON object.")
             body.update(extra)
+
+        if fam == "generic":
+            print(f"[ComfyUI-Magnific] '{model}' has no built-in parameter profile; "
+                  "sending common fields only — add model-specific params via extra_params_json.")
 
         client = build_client(provider, api_key, poll_interval, max_wait_seconds)
         urls = client.run(

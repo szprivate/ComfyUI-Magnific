@@ -68,9 +68,19 @@ the `reference` input.
   reference" endpoint — references are supplied inline at generation time — so this
   node prepares that payload. If Magnific ships a dedicated endpoint later, it slots
   into `nodes/reference.py`.
-- **Video model → endpoint** slugs live in `VIDEO_MODELS` in `nodes/video_generate.py`.
-  If Magnific renames a model, either update that map or paste the exact path into
-  the node's `endpoint_override` widget — no code change needed.
+- **Video models.** Each model is its own endpoint (`VIDEO_MODELS` in
+  `nodes/video_generate.py`) and they do **not** share one request schema, so the
+  body is built per model *family* and filtered to that family's fields:
+  - **Kling** (`kling-*`) — confirmed: sends `cfg_scale`, `generate_audio`,
+    `negative_prompt`.
+  - **Seedance** (`seedance-pro-1080p`) — confirmed: sends `camera_fixed`,
+    `frames_per_second`, `seed` (Kling-only fields are **not** sent).
+  - **MiniMax/Hailuo, PixVerse, Wan, Runway, LTX** — best-effort: only the common
+    fields (`prompt`, `duration`, `aspect_ratio`, `image`) are sent; supply any
+    model-specific parameters via `extra_params_json`.
+
+  If Magnific renames a slug, update `VIDEO_MODELS` or paste the exact path into the
+  node's `endpoint_override` widget — no code change needed.
 - **`extra_params_json`** on each generating node lets you pass any additional
   documented API parameter (e.g. Mystic's `styling` object) as a JSON object that
   is merged into the request body.
