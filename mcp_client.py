@@ -382,7 +382,7 @@ async def _upload_image(session, png_bytes: bytes, status_cb) -> str:
 
 
 async def _op_video(session, slug, clip, start_url, end_url, start_bytes, end_bytes,
-                    poll_interval, max_wait, status_cb):
+                    references, poll_interval, max_wait, status_cb):
     # Resolve keyframes: a URL wins; otherwise upload the tensor bytes to a creation.
     keyframes = dict(clip.get("keyframes") or {})
     for role, url, data in (("start", start_url, start_bytes), ("end", end_url, end_bytes)):
@@ -391,6 +391,20 @@ async def _op_video(session, slug, clip, start_url, end_url, start_bytes, end_by
             keyframes[role] = {"type": "image", "url": ref}
     if keyframes:
         clip["keyframes"] = keyframes
+
+    # Resolve references: each is {type, url?|bytes?}. Bytes (a ComfyUI IMAGE) are
+    # uploaded to a creation first; a url/identifier is used as-is. The MCP
+    # references array is [{type, url}, ...] (image/video/character/style/audio/…).
+    ref_items = []
+    for r in (references or []):
+        rtype = (r.get("type") or "image").strip()
+        url = (r.get("url") or "").strip()
+        if not url and r.get("bytes"):
+            url = await _upload_image(session, r["bytes"], status_cb)
+        if url:
+            ref_items.append({"type": rtype, "url": url})
+    if ref_items:
+        clip["references"] = (clip.get("references") or []) + ref_items
 
     # Snapshot the newest video id *before* submitting so we can detect the new one.
     pre_ident = await _latest_video_identifier(session)
@@ -478,6 +492,7 @@ def authorize() -> list[str]:
 
 def generate_video(slug: str, clip: dict, *, start_url: str = "", end_url: str = "",
                    start_bytes: Optional[bytes] = None, end_bytes: Optional[bytes] = None,
+                   references: Optional[list] = None,
                    poll_interval: float = 6.0, max_wait: float = 1800.0,
                    status_cb: Optional[Callable[[str], None]] = None) -> list[str]:
     """Submit a video_generate clip via the MCP, poll to completion, return URL(s).
@@ -485,6 +500,10 @@ def generate_video(slug: str, clip: dict, *, start_url: str = "", end_url: str =
     Keyframe images may be given as public URLs (`start_url`/`end_url`) or as raw PNG
     bytes (`start_bytes`/`end_bytes`) which are uploaded to a creation first. A URL
     takes precedence over bytes for the same role.
+
+    ``references`` is a list of ``{type, url?|bytes?}`` — multiple reference images
+    (as PNG ``bytes`` uploaded first), videos and audio (as URLs / creation ids).
+    They become the MCP ``references`` array (image/video/character/style/audio/…).
     """
     _require_mcp()
     if not has_tokens():
@@ -494,7 +513,7 @@ def generate_video(slug: str, clip: dict, *, start_url: str = "", end_url: str =
         )
     return _run(lambda: _with_session(
         lambda s: _op_video(s, slug, clip, start_url, end_url, start_bytes, end_bytes,
-                            poll_interval, max_wait, status_cb)
+                            references, poll_interval, max_wait, status_cb)
     ))
 
 

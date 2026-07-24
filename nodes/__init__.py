@@ -21,10 +21,16 @@ for _mod in (image_generate, text_to_image, image_edit, upscale, video_generate,
     NODE_CLASS_MAPPINGS.update(_mod.NODE_CLASS_MAPPINGS)
     NODE_DISPLAY_NAME_MAPPINGS.update(_mod.NODE_DISPLAY_NAME_MAPPINGS)
 
-# The MCP node is optional (OAuth + the `mcp` package). Register it defensively so
-# a missing dep or import hiccup never takes down the REST nodes above.
+# The MCP node is optional (OAuth + the `mcp` package) and is a V3-schema node
+# (comfy_api.latest.io) — it needs ComfyUI's runtime to import. Register it
+# defensively so a missing dep or import hiccup never takes down the REST nodes.
+# Finalize its schema at load (mirroring the comfy_entrypoint path) so it registers
+# cleanly through the classic NODE_CLASS_MAPPINGS route alongside the V1 nodes.
 try:
     from . import mcp_video
+    for _cls in mcp_video.NODE_CLASS_MAPPINGS.values():
+        if hasattr(_cls, "GET_SCHEMA"):
+            _cls.GET_SCHEMA()  # validate + finalize the V3 schema
     NODE_CLASS_MAPPINGS.update(mcp_video.NODE_CLASS_MAPPINGS)
     NODE_DISPLAY_NAME_MAPPINGS.update(mcp_video.NODE_DISPLAY_NAME_MAPPINGS)
 except Exception as _exc:  # noqa: BLE001
