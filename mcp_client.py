@@ -339,6 +339,28 @@ async def _op_video(session, slug, clip, start_url, end_url, start_bytes, end_by
     raise MCPTimeout(f"creation {ident} not finished after {max_wait:.0f}s")
 
 
+# ── sync bridge ─────────────────────────────────────────────────────────────
+def _run(make_coro):
+    """Run an async coroutine to completion from sync code — even when this thread
+    already has a running event loop.
+
+    ComfyUI executes node functions *inside* an asyncio loop, so ``asyncio.run``
+    (which forbids a nested run) raises "cannot be called from a running event
+    loop". When a loop is already running we execute in a dedicated thread with its
+    own fresh loop and block for the result; otherwise ``asyncio.run`` is fine.
+    ``make_coro`` is a zero-arg callable returning a fresh coroutine (created inside
+    the worker so it binds to that thread's loop).
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(make_coro())  # no running loop in this thread
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(make_coro())).result()
+
+
 # ── public sync API ───────────────────────────────────────────────────────
 def authorize() -> list[str]:
     """Interactive one-time OAuth sign-in; returns the MCP tool names on success."""
@@ -348,7 +370,7 @@ def authorize() -> list[str]:
         async def _op(session):
             tools = await session.list_tools()
             return [t.name for t in tools.tools]
-        return asyncio.run(_with_session(_op, interactive=True, holder=holder))
+        return _run(lambda: _with_session(_op, interactive=True, holder=holder))
     finally:
         srv = holder.get("server")
         if srv is not None:
@@ -374,7 +396,7 @@ def generate_video(slug: str, clip: dict, *, start_url: str = "", end_url: str =
             "Magnific MCP not authorized. Run 'python authorize_magnific.py' in the "
             "ComfyUI-Magnific folder once to sign in."
         )
-    return asyncio.run(_with_session(
+    return _run(lambda: _with_session(
         lambda s: _op_video(s, slug, clip, start_url, end_url, start_bytes, end_bytes,
                             poll_interval, max_wait, status_cb)
     ))
