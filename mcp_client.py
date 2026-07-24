@@ -185,6 +185,14 @@ async def _with_session(op: Callable, *, interactive=False, holder=None):
 
 
 async def _call(session, name: str, args: dict):
+    """Call a tool; return (text, data, is_error).
+
+    ``data`` is the best machine-readable view: the MCP ``structuredContent`` when
+    it's a dict (the machine channel), else JSON parsed from the text blocks. The
+    raw joined ``text`` is always returned too — several Magnific tools reply with
+    TOON / key:value text (e.g. ``creations_search``, ``creations_get``) rather
+    than JSON, and the human-facing ``<system_reminder>`` also arrives as text.
+    """
     res = await session.call_tool(name, args)
     texts = []
     for block in getattr(res, "content", None) or []:
@@ -199,7 +207,9 @@ async def _call(session, name: str, args: dict):
             parsed = json.loads(stripped)
         except Exception:  # noqa: BLE001
             parsed = None
-    return text, parsed, bool(getattr(res, "isError", False))
+    structured = getattr(res, "structuredContent", None)
+    data = structured if isinstance(structured, dict) else parsed
+    return text, data, bool(getattr(res, "isError", False))
 
 
 # ── response parsing (creations are key:value text or json) ──────────────────
@@ -218,19 +228,80 @@ def _parse_kv_text(text: str) -> Optional[dict]:
     return out or None
 
 
+_IDENT_LINE_RE = re.compile(r'(?mi)^\s*-?\s*identifier:\s*"?([A-Za-z0-9_-]{6,})"?')
+
+
+def _deep_find_identifier(node) -> Optional[str]:
+    """First value of an ``identifier`` (or ``id``) key anywhere in a dict/list."""
+    if isinstance(node, dict):
+        for key in ("identifier", "id"):
+            v = node.get(key)
+            if isinstance(v, (str, int)) and str(v).strip():
+                return str(v).strip()
+        for v in node.values():
+            r = _deep_find_identifier(v)
+            if r:
+                return r
+    elif isinstance(node, list):
+        for v in node:
+            r = _deep_find_identifier(v)
+            if r:
+                return r
+    return None
+
+
 def _extract_identifier(js, text: str) -> Optional[str]:
+    """Pull the (newest / first) creation identifier from a tool response.
+
+    Handles: a ``creations:[{identifier}]`` envelope, any nested ``identifier``/
+    ``id`` key in ``structuredContent``/JSON, and TOON/key:value text where the
+    first ``identifier:`` line is the newest creation (``creations_search`` lists
+    newest-first). Returns None if none present — e.g. ``video_generate`` replies
+    only a ``<system_reminder>`` on no-UI clients, so the caller then recovers the
+    id via ``creations_search``.
+    """
     if isinstance(js, dict):
         cr = js.get("creations")
         if isinstance(cr, list) and cr and isinstance(cr[0], dict):
             ident = cr[0].get("identifier") or cr[0].get("id")
             if ident:
                 return str(ident)
-        if js.get("identifier"):
-            return str(js["identifier"])
-    kv = _parse_kv_text(text)
-    if kv and kv.get("identifier"):
-        return kv["identifier"]
+        d = _deep_find_identifier(js)
+        if d:
+            return d
+    mo = _IDENT_LINE_RE.search(text or "")
+    if mo:
+        return mo.group(1)
     return None
+
+
+async def _latest_video_identifier(session) -> Optional[str]:
+    """Newest video creation's identifier via creations_search (raw TOON text)."""
+    text, data, err = await _call(session, "creations_search",
+                                  {"from": "history", "fileType": "video", "page": 1})
+    if err:
+        return None
+    return _extract_identifier(data, text)
+
+
+async def _await_new_video_identifier(session, previous: Optional[str],
+                                      status_cb, timeout: float = 60.0) -> Optional[str]:
+    """Poll creations_search until a *new* video creation (id != previous) appears.
+
+    video_generate on a no-UI client returns no identifier in its response, so we
+    detect the creation it just queued as "the newest one that wasn't there before
+    we submitted" — avoiding grabbing a stale prior creation.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        cur = await _latest_video_identifier(session)
+        if cur and cur != previous:
+            return cur
+        if status_cb:
+            status_cb("queued — locating creation")
+        await asyncio.sleep(3.0)
+    # Last resort: whatever is newest now (may still be the just-submitted one).
+    return await _latest_video_identifier(session)
 
 
 def _status_of(body) -> Optional[str]:
@@ -277,10 +348,18 @@ async def _upload_image(session, png_bytes: bytes, status_cb) -> str:
     if status_cb:
         status_cb("uploading image")
     text, js, err = await _call(session, "creations_request_upload", {"mimeType": "image/png"})
-    if err or not isinstance(js, dict):
+    if err:
         raise MCPError(f"creations_request_upload failed: {text[:400]}")
-    put_url = js.get("proxyUploadUrl") or js.get("uploadUrl") or js.get("url")
-    path = js.get("path")
+    # The presigned target is a plain JSON body; if `js` (structuredContent) doesn't
+    # carry it, fall back to JSON parsed from the text block.
+    payload = js if (isinstance(js, dict) and js.get("proxyUploadUrl")) else None
+    if payload is None:
+        try:
+            payload = json.loads(text.strip())
+        except Exception:  # noqa: BLE001
+            payload = {}
+    put_url = payload.get("proxyUploadUrl") or payload.get("uploadUrl") or payload.get("url")
+    path = payload.get("path")
     if not put_url or not path:
         raise MCPError(f"request_upload missing proxyUploadUrl/path: {text[:400]}")
 
@@ -313,19 +392,36 @@ async def _op_video(session, slug, clip, start_url, end_url, start_bytes, end_by
     if keyframes:
         clip["keyframes"] = keyframes
 
+    # Snapshot the newest video id *before* submitting so we can detect the new one.
+    pre_ident = await _latest_video_identifier(session)
+
     text, js, err = await _call(session, "video_generate", {"video": {"clips": [clip]}})
     if err:
         raise MCPError(f"video_generate failed: {text[:500]}")
+    # This MCP is UI-oriented: on a no-UI client video_generate replies only a
+    # <system_reminder> and hides the identifier. Prefer an id in the response
+    # (structuredContent / json), else recover the just-queued creation via search.
     ident = _extract_identifier(js, text)
     if not ident:
-        raise MCPError(f"video_generate returned no creation identifier: {text[:400]}")
+        ident = await _await_new_video_identifier(session, pre_ident, status_cb)
+    if not ident:
+        raise MCPError(
+            "video_generate: could not resolve a creation identifier from the "
+            f"response or creations_search. Response was: {text[:300]}"
+        )
     if status_cb:
         status_cb(f"queued {ident}")
     deadline = time.time() + max_wait
     while time.time() < deadline:
         await asyncio.sleep(poll_interval)
         t2, j2, _e2 = await _call(session, "creations_get", {"creationIdentifier": ident})
-        body = j2 or _parse_kv_text(t2) or {}
+        # creations_get replies key:value text (or json/structuredContent) — take the
+        # view that actually carries a status/url.
+        body = {}
+        for cand in (j2, _parse_kv_text(t2)):
+            if isinstance(cand, dict) and (_status_of(cand) or _asset_url(cand)):
+                body = cand
+                break
         status = _status_of(body)
         url = _asset_url(body)
         if status_cb:
