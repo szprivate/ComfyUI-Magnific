@@ -15,8 +15,10 @@ your browser to authorize Magnific, then proceeds to generate; the token is reus
 silently afterwards. `mcp` must be installed in ComfyUI's Python (`pip install mcp`).
 (`authorize_magnific.py` can still pre-authorize from a terminal if you prefer.)
 
-Image inputs are uploaded to the MCP (request_upload -> PUT -> finalize); URLs are
-used as-is (a URL wins over a connected IMAGE for the same slot).
+Image and video inputs are uploaded to the MCP (request_upload -> PUT -> finalize);
+URLs are used as-is (a URL wins over a connected IMAGE for the same slot). Connect a
+ComfyUI VIDEO (e.g. Load Video) to the autogrow `reference_videos` group to use it as
+a reference video.
 """
 from __future__ import annotations
 
@@ -26,7 +28,7 @@ from pathlib import Path
 
 import os
 
-from comfy_api.latest import io, InputImpl, ui
+from comfy_api.latest import io, InputImpl, Types, ui
 
 # Import the pack-root mcp_client / freepik_api whether loaded as a package or not.
 _PACK_DIR = Path(__file__).resolve().parent.parent
@@ -40,6 +42,24 @@ from freepik_api import tensor_to_base64_png  # noqa: E402
 def _png_bytes(image) -> bytes:
     """A ComfyUI IMAGE tensor (single frame) -> raw PNG bytes."""
     return base64.b64decode(tensor_to_base64_png(image))
+
+
+def _video_mp4_bytes(video) -> bytes:
+    """A connected ComfyUI VIDEO -> raw mp4 bytes (muxed to mp4 for a mime the MCP
+    accepts; an on-disk mp4 source is stream-copied, not re-encoded)."""
+    import tempfile
+    import uuid
+
+    tmp = os.path.join(tempfile.gettempdir(), f"magnific_vref_{uuid.uuid4().hex[:8]}.mp4")
+    try:
+        video.save_to(tmp, format=Types.VideoContainer.MP4)
+        with open(tmp, "rb") as fh:
+            return fh.read()
+    finally:
+        try:
+            os.remove(tmp)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # Model slugs from the MCP video_models_list catalog (newer / REST-missing ones).
@@ -63,6 +83,7 @@ RESOLUTIONS = ["1080p", "720p", "580p", "480p"]
 # Reference roles the MCP references array accepts (per-model support varies).
 REFERENCE_IMAGE_TYPES = ["image", "character", "style", "product", "effect"]
 _MAX_REFERENCE_IMAGES = 8
+_MAX_REFERENCE_VIDEOS = 4
 
 
 class MagnificMCPVideo(io.ComfyNode):
@@ -105,8 +126,17 @@ class MagnificMCPVideo(io.ComfyNode):
                     tooltip="Multiple reference images — each connection grows a new slot."),
                 io.Combo.Input("reference_image_type", options=REFERENCE_IMAGE_TYPES, default="image",
                                optional=True, tooltip="Role applied to the reference images above."),
+                # Autogrow reference videos — connect a VIDEO (e.g. Load Video), the
+                # next slot appears. Each is uploaded to the MCP as a video reference.
+                io.Autogrow.Input(
+                    "reference_videos", optional=True,
+                    template=io.Autogrow.TemplatePrefix(
+                        input=io.Video.Input("reference_video",
+                                             tooltip="Reference video (uploaded to the MCP)."),
+                        prefix="reference_video_", min=0, max=_MAX_REFERENCE_VIDEOS),
+                    tooltip="Multiple reference videos — each connection grows a new slot."),
                 io.String.Input("reference_video_urls", optional=True, multiline=True, default="",
-                                tooltip="Reference video URLs / creation ids — one per line."),
+                                tooltip="Extra reference video URLs / creation ids — one per line."),
                 io.String.Input("reference_audio_url", optional=True, default="",
                                 tooltip="Reference audio URL (Seedance 2.0 lipsync)."),
                 io.String.Input("extra_params_json", optional=True, multiline=True, default="",
@@ -126,6 +156,7 @@ class MagnificMCPVideo(io.ComfyNode):
                 slug_override="", start_image=None, end_image=None,
                 start_image_url="", end_image_url="",
                 reference_images: io.Autogrow.Type = None, reference_image_type="image",
+                reference_videos: io.Autogrow.Type = None,
                 reference_video_urls="", reference_audio_url="",
                 extra_params_json="", poll_interval=6.0, max_wait_seconds=1800) -> io.NodeOutput:
         import json
@@ -162,17 +193,27 @@ class MagnificMCPVideo(io.ComfyNode):
         end_bytes = (_png_bytes(end_image)
                      if (end_image is not None and not (end_image_url or "").strip()) else None)
 
-        # References: autogrow images (uploaded) + video/audio URLs.
+        # References: autogrow images (uploaded) + connected videos (uploaded) +
+        # video/audio URLs.
+        def _slot_index(n):
+            tail = n.rsplit("_", 1)[-1]
+            return int(tail) if tail.isdigit() else 0
+
         references: list[dict] = []
-        ag = reference_images or {}
-        # sort by trailing slot index so refs keep a stable order
-        for name in sorted(ag, key=lambda n: int(n.rsplit("_", 1)[-1]) if n.rsplit("_", 1)[-1].isdigit() else 0):
-            imgs = ag[name]
+        ag_img = reference_images or {}
+        for name in sorted(ag_img, key=_slot_index):
+            imgs = ag_img[name]
             if imgs is None:
                 continue
             # An IMAGE input may be a batch; take each frame as a separate reference.
             for i in range(imgs.shape[0]):
                 references.append({"type": reference_image_type, "bytes": _png_bytes(imgs[i:i + 1])})
+        ag_vid = reference_videos or {}
+        for name in sorted(ag_vid, key=_slot_index):
+            vid = ag_vid[name]
+            if vid is None:
+                continue
+            references.append({"type": "video", "bytes": _video_mp4_bytes(vid), "mime": "video/mp4"})
         for line in (reference_video_urls or "").splitlines():
             u = line.strip()
             if u:

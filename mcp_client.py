@@ -383,17 +383,20 @@ def _asset_url(body) -> Optional[str]:
     return None
 
 
-async def _upload_image(session, png_bytes: bytes, status_cb) -> str:
-    """Upload PNG bytes and return a creation identifier usable as a keyframe url.
+async def _upload_bytes(session, data: bytes, mime: str, status_cb) -> str:
+    """Upload raw media bytes to the MCP and return a creation identifier.
 
-    request_upload (presigned PUT target) -> HTTP PUT the raw bytes outside MCP ->
-    finalize_upload (temp path -> hidden creation).
+    Works for images (``image/png`` …) and videos (``video/mp4`` …) — the mime must
+    be one request_upload accepts. request_upload (presigned PUT target) -> HTTP PUT
+    the raw bytes outside MCP -> finalize_upload (temp path -> hidden creation). The
+    returned identifier is usable as a keyframe/reference ``url``.
     """
     import requests
 
+    _check_interrupt()
     if status_cb:
-        status_cb("uploading image")
-    text, js, err = await _call(session, "creations_request_upload", {"mimeType": "image/png"})
+        status_cb(f"uploading {mime.split('/', 1)[0]}")
+    text, js, err = await _call(session, "creations_request_upload", {"mimeType": mime})
     if err:
         raise MCPError(f"creations_request_upload failed: {text[:400]}")
     # The presigned target is a plain JSON body; if `js` (structuredContent) doesn't
@@ -410,8 +413,7 @@ async def _upload_image(session, png_bytes: bytes, status_cb) -> str:
         raise MCPError(f"request_upload missing proxyUploadUrl/path: {text[:400]}")
 
     def _put():
-        r = requests.put(put_url, data=png_bytes,
-                         headers={"Content-Type": "image/png"}, timeout=180)
+        r = requests.put(put_url, data=data, headers={"Content-Type": mime}, timeout=300)
         r.raise_for_status()
 
     # PUT is a blocking HTTP call outside MCP — run it off the event loop.
@@ -425,6 +427,11 @@ async def _upload_image(session, png_bytes: bytes, status_cb) -> str:
     if not ident:
         raise MCPError(f"finalize_upload returned no identifier/url: {t2[:400]}")
     return ident
+
+
+async def _upload_image(session, png_bytes: bytes, status_cb) -> str:
+    """Upload PNG bytes (a keyframe/reference image); returns a creation identifier."""
+    return await _upload_bytes(session, png_bytes, "image/png", status_cb)
 
 
 def _check_interrupt():
@@ -465,15 +472,16 @@ async def _op_video(session, slug, clip, start_url, end_url, start_bytes, end_by
     if keyframes:
         clip["keyframes"] = keyframes
 
-    # Resolve references: each is {type, url?|bytes?}. Bytes (a ComfyUI IMAGE) are
-    # uploaded to a creation first; a url/identifier is used as-is. The MCP
-    # references array is [{type, url}, ...] (image/video/character/style/audio/…).
+    # Resolve references: each is {type, url?|bytes?, mime?}. Bytes (a connected
+    # ComfyUI IMAGE or VIDEO) are uploaded to a creation first with the right mime;
+    # a url/identifier is used as-is. The MCP references array is [{type, url}, ...]
+    # (image/video/character/style/audio/…).
     ref_items = []
     for r in (references or []):
         rtype = (r.get("type") or "image").strip()
         url = (r.get("url") or "").strip()
         if not url and r.get("bytes"):
-            url = await _upload_image(session, r["bytes"], status_cb)
+            url = await _upload_bytes(session, r["bytes"], r.get("mime") or "image/png", status_cb)
         if url:
             ref_items.append({"type": rtype, "url": url})
     if ref_items:

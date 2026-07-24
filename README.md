@@ -157,13 +157,19 @@ registration and token store, no dependency on any other app.
    over the tensor for that slot).
 
 **Multiple reference images / videos (autogrow).** `Magnific MCP Video` is a ComfyUI
-**V3-schema** node, so its `reference_images` input is a native **autogrow** group:
-connect one reference image and the next empty `reference_image_N` slot appears —
-attach as many as the model allows. Each connected IMAGE is uploaded to the MCP and
-sent in the clip's `references` array. Set `reference_image_type` (`image` / `character`
-/ `style` / `product` / `effect`) for the role those images play. Reference **videos**
-go in `reference_video_urls` (one URL / creation id per line); a Seedance 2.0 lip-sync
-track goes in `reference_audio_url`. All become `references: [{type, url}, …]`.
+**V3-schema** node, so `reference_images` and `reference_videos` are native **autogrow**
+groups: connect one and the next empty slot appears — attach as many as the model
+allows.
+- **Images** — connect ComfyUI `IMAGE`s to `reference_images`; each is uploaded to the
+  MCP. Set `reference_image_type` (`image` / `character` / `style` / `product` / `effect`)
+  for the role they play.
+- **Videos** — connect ComfyUI `VIDEO`s (e.g. from **Load Video**, or another node's
+  VIDEO output) to `reference_videos`; each is muxed to mp4 and uploaded to the MCP.
+  You can also paste extra video URLs / creation ids in `reference_video_urls` (one per
+  line).
+- **Audio** — a Seedance 2.0 lip-sync track goes in `reference_audio_url`.
+
+All become the clip's `references: [{type, url}, …]` array.
 
 > Auth note: this node uses **OAuth**, unrelated to the `MAGNIFIC_API_KEY` / `FREEPIK_API_KEY`
 > used by the REST nodes. Allowed `duration` / `aspect_ratio` / `resolution` and which
