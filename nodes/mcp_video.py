@@ -22,7 +22,7 @@ import base64
 import sys
 from pathlib import Path
 
-from comfy_api.latest import io
+from comfy_api.latest import io, InputImpl
 
 # Import the pack-root mcp_client / freepik_api whether loaded as a package or not.
 _PACK_DIR = Path(__file__).resolve().parent.parent
@@ -111,6 +111,7 @@ class MagnificMCPVideo(io.ComfyNode):
                 io.Int.Input("max_wait_seconds", optional=True, default=1800, min=60, max=3600, step=30),
             ],
             outputs=[
+                io.Video.Output(display_name="video"),
                 io.String.Output(display_name="video_path"),
                 io.String.Output(display_name="video_url"),
             ],
@@ -186,7 +187,7 @@ class MagnificMCPVideo(io.ComfyNode):
             poll_interval=poll_interval, max_wait=max_wait_seconds, status_cb=_status,
         )
         video_path = mcp_client.download_to_output(urls[0], prefix=f"magnific_mcp_{slug}", ext_hint=".mp4")
-        return io.NodeOutput(video_path, "\n".join(urls))
+        return io.NodeOutput(InputImpl.VideoFromFile(video_path), video_path, "\n".join(urls))
 
 
 NODE_CLASS_MAPPINGS = {"MagnificMCPVideo": MagnificMCPVideo}

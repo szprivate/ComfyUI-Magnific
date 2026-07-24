@@ -130,8 +130,8 @@ class MagnificVideoGenerate:
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("video_path", "video_url")
+    RETURN_TYPES = ("VIDEO", "STRING", "STRING")
+    RETURN_NAMES = ("video", "video_path", "video_url")
     FUNCTION = "generate"
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
@@ -189,7 +189,8 @@ class MagnificVideoGenerate:
             check_interrupt=comfy_interrupt_checker(),
         )
         video_path = save_url_to_output(client, urls[0], prefix=f"magnific_{model}", ext_hint=".mp4")
-        return (video_path, "\n".join(urls))
+        from comfy_api.input_impl import VideoFromFile  # lazy: only when a video is produced
+        return (VideoFromFile(video_path), video_path, "\n".join(urls))
 
 
 NODE_CLASS_MAPPINGS = {"MagnificVideoGenerate": MagnificVideoGenerate}

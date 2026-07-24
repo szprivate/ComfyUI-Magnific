@@ -16,18 +16,22 @@ mirroring the Magnific MCP tool set as native ComfyUI nodes.
 | **Magnific Text-to-Image** | `POST /v1/ai/text-to-image/<model>` (Flux, Seedream, Z-Image, Hyperflux, Runway) | `IMAGE`, `image_urls` |
 | **Magnific Image Edit** | style transfer, Kontext edit, relight, remove bg, expand, reimagine | `IMAGE`, `image_urls` |
 | **Magnific Upscale** | `POST /v1/ai/image-upscaler` (creative) / `…/image-upscaler-precision` (precise) | `IMAGE`, `image_url` |
-| **Magnific Video Generate** | `POST /v1/ai/{image,text}-to-video/<model>` (Kling 2.x, Seedance, Hailuo, Wan, PixVerse, Runway, LTX) | `video_path`, `video_url` |
-| **Magnific Video Advanced** | `POST /v1/ai/video/<model>` — Kling 3, Kling 3 Omni, OmniHuman 1.5, Act-Two, VFX | `video_path`, `video_url` |
+| **Magnific Video Generate** | `POST /v1/ai/{image,text}-to-video/<model>` (Kling 2.x, Seedance, Hailuo, Wan, PixVerse, Runway, LTX) | `VIDEO`, `video_path`, `video_url` |
+| **Magnific Video Advanced** | `POST /v1/ai/video/<model>` — Kling 3, Kling 3 Omni, OmniHuman 1.5, Act-Two, VFX | `VIDEO`, `video_path`, `video_url` |
 | **Magnific Reference Create (Soul)** | *(local — packages a reference image)* | `MAGNIFIC_REFERENCE` |
 | **Magnific Text-to-Speech** | `POST /v1/ai/voiceover` | `audio_path`, `audio_url` |
 | **Magnific Audio Generate** | `POST /v1/ai/music-generation` / `…/sound-effects` | `audio_path`, `audio_url` |
 | **Magnific Audio Isolation** | `POST /v1/ai/audio-isolation` | `audio_path`, `audio_url` |
-| **Magnific MCP Video** | Magnific **MCP** `video_generate` (OAuth) — Seedance 2.0, Sora 2, Kling 3, Veo 3.1 | `video_path`, `video_url` |
+| **Magnific MCP Video** | Magnific **MCP** `video_generate` (OAuth) — Seedance 2.0, Sora 2, Kling 3, Veo 3.1 | `VIDEO`, `video_path`, `video_url` |
 
 Every generation endpoint is **asynchronous**: the node submits a task, polls
 `GET /v1/ai/<endpoint>/{task_id}` until the status is `COMPLETED` (or `FAILED`),
 then downloads the result. Images come back as ComfyUI `IMAGE` tensors; video and
-audio are saved into your ComfyUI `output/` folder and the file path is returned.
+audio are saved into your ComfyUI `output/` folder.
+
+The three video nodes output a native ComfyUI **`VIDEO`** (first output) that wires
+straight into **Save Video** / **Preview Video** (and VideoHelperSuite), alongside
+the `video_path` (the saved file) and `video_url` (the remote source) strings.
 
 ## Install
 
