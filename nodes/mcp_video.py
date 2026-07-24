@@ -10,8 +10,10 @@ This is a ComfyUI **V3-schema** node (`comfy_api.latest.io`) so it can use a nat
 empty slot appears, letting you fan in multiple reference images. Reference videos
 and audio are given as URLs / creation identifiers.
 
-One-time setup: run `python authorize_magnific.py` in the pack folder to sign in
-(browser). `mcp` must be installed in ComfyUI's Python (`pip install mcp`).
+Auth: the node signs you in on demand — the first run (with no stored token) opens
+your browser to authorize Magnific, then proceeds to generate; the token is reused
+silently afterwards. `mcp` must be installed in ComfyUI's Python (`pip install mcp`).
+(`authorize_magnific.py` can still pre-authorize from a terminal if you prefer.)
 
 Image inputs are uploaded to the MCP (request_upload -> PUT -> finalize); URLs are
 used as-is (a URL wins over a connected IMAGE for the same slot).

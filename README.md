@@ -141,13 +141,12 @@ registration and token store, no dependency on any other app.
 
 1. **Install `mcp`** into the same Python that runs ComfyUI: `pip install mcp`.
    (The REST nodes don't need it; if it's missing, only this node is skipped.)
-2. **Authorize once** — from the pack folder, with ComfyUI's Python:
-   ```bash
-   python authorize_magnific.py
-   ```
-   A browser opens to sign in to Magnific; tokens are saved to `.mcp_tokens/`
-   (gitignored) and refreshed silently afterwards. Re-run if the node reports it needs
-   re-authorization.
+2. **Sign in — automatic on first run.** The first time you queue the node with no
+   stored token, it opens your browser to authorize Magnific, then proceeds to
+   generate; tokens are saved to `.mcp_tokens/` (gitignored) and reused/refreshed
+   silently afterwards. The browser opens on the machine running ComfyUI.
+   *(Optional: run `python authorize_magnific.py` from the pack folder to
+   pre-authorize from a terminal before a long generation.)*
 3. **Use the node** — pick a `model` slug (`bytedance-seedance-pro-2.0`, `kling-30`,
    `openai-sora2-standard`, …, or `custom` + `slug_override`), set `prompt` / `duration` /
    `aspect_ratio` / `resolution`. For image-to-video, connect a ComfyUI **IMAGE** to

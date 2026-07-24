@@ -30,6 +30,10 @@ PACK_DIR = Path(__file__).resolve().parent
 TOKEN_DIR = PACK_DIR / ".mcp_tokens"
 REDIRECT_PORT = 8207  # this pack's own OAuth redirect port
 
+# Serialize interactive browser sign-in so two nodes queued at once don't both
+# open a browser / fight over the redirect port; the loser re-checks the token.
+_AUTH_LOCK = threading.Lock()
+
 _DONE = {"done", "completed", "complete", "succeeded", "success", "finished", "ready", "generated"}
 _FAIL = {"failed", "error", "errored", "cancelled", "canceled", "rejected"}
 _VIDEO_EXT = (".mp4", ".webm", ".mov", ".m4v", ".mkv", ".gif")
@@ -42,7 +46,8 @@ class MCPError(RuntimeError):
 
 
 class MCPAuthError(MCPError):
-    """No usable token — run authorize_magnific.py first (or re-run to refresh)."""
+    """No usable token / sign-in failed. The nodes authorize on demand (browser);
+    this surfaces only if the interactive sign-in is declined or times out."""
 
 
 class MCPNotInstalled(MCPError):
@@ -116,15 +121,14 @@ def _make_provider(interactive: bool, holder: Optional[dict]):
 
     async def redirect_handler(authorization_url: str) -> None:
         if not interactive:
-            raise MCPAuthError(
-                "Magnific MCP not authorized (or token expired). Run "
-                "authorize_magnific.py once to sign in."
-            )
+            # Caught by the caller, which retries with an interactive session that
+            # opens the browser. (Also the message a bare silent call would show.)
+            raise MCPAuthError("Magnific MCP not authorized (or token expired).")
         try:
             webbrowser.open(authorization_url)
         except Exception:  # noqa: BLE001
             pass
-        print(f"\n[ComfyUI-Magnific] Authorize in your browser:\n  {authorization_url}\n")
+        print(f"\n[ComfyUI-Magnific] Authorize Magnific in your browser:\n  {authorization_url}\n")
 
     async def callback_handler():
         if not interactive or holder is None:
@@ -182,6 +186,48 @@ async def _with_session(op: Callable, *, interactive=False, holder=None):
         async with ClientSession(read, write) as session:
             await session.initialize()
             return await op(session)
+
+
+def _run_session_op(op: Callable, *, interactive: bool):
+    """Run a session op synchronously. When ``interactive``, start the one-shot
+    local OAuth callback server (browser sign-in) for the duration of the call."""
+    holder = _start_callback_server(REDIRECT_PORT) if interactive else None
+    try:
+        return _run(lambda: _with_session(op, interactive=interactive, holder=holder))
+    finally:
+        if holder is not None:
+            srv = holder.get("server")
+            if srv is not None:
+                try:
+                    srv.shutdown()
+                except Exception:  # noqa: BLE001
+                    pass
+
+
+def _run_authorized(op: Callable, status_cb: Optional[Callable[[str], None]] = None):
+    """Run ``op`` in an MCP session, authorizing on demand — no separate script.
+
+    Silent-first when a token exists; if that token is unusable (or none exists),
+    fire the interactive browser sign-in (serialized by ``_AUTH_LOCK`` so two nodes
+    don't both open a browser). The browser opens on the machine running ComfyUI.
+    """
+    _require_mcp()
+    if has_tokens():
+        try:
+            return _run_session_op(op, interactive=False)
+        except MCPAuthError:
+            if status_cb:
+                status_cb("stored authorization expired — re-authorizing in your browser")
+    with _AUTH_LOCK:
+        # A concurrent run may have just authorized while we waited for the lock.
+        if has_tokens():
+            try:
+                return _run_session_op(op, interactive=False)
+            except MCPAuthError:
+                pass
+        if status_cb:
+            status_cb("opening your browser to authorize Magnific — complete the sign-in there")
+        return _run_session_op(op, interactive=True)
 
 
 async def _call(session, name: str, args: dict):
@@ -472,22 +518,28 @@ def _run(make_coro):
 
 
 # ── public sync API ───────────────────────────────────────────────────────
+async def _list_tools_op(session):
+    tools = await session.list_tools()
+    return [t.name for t in tools.tools]
+
+
 def authorize() -> list[str]:
-    """Interactive one-time OAuth sign-in; returns the MCP tool names on success."""
+    """Force the interactive OAuth sign-in now; returns the MCP tool names.
+
+    Optional — the nodes authorize on demand on first use. Kept for the
+    ``authorize_magnific.py`` helper and pre-authorizing before a long run.
+    """
     _require_mcp()
-    holder = _start_callback_server(REDIRECT_PORT)
-    try:
-        async def _op(session):
-            tools = await session.list_tools()
-            return [t.name for t in tools.tools]
-        return _run(lambda: _with_session(_op, interactive=True, holder=holder))
-    finally:
-        srv = holder.get("server")
-        if srv is not None:
-            try:
-                srv.shutdown()
-            except Exception:  # noqa: BLE001
-                pass
+    return _run_session_op(_list_tools_op, interactive=True)
+
+
+def ensure_authorized(status_cb: Optional[Callable[[str], None]] = None) -> bool:
+    """Make sure we have a usable token, authorizing via the browser if needed.
+
+    Returns True on success; raises MCPAuthError/MCPError on failure. Lets a node
+    authorize (opening the browser from ComfyUI) without generating anything."""
+    _run_authorized(_list_tools_op, status_cb)
+    return True
 
 
 def generate_video(slug: str, clip: dict, *, start_url: str = "", end_url: str = "",
@@ -504,17 +556,15 @@ def generate_video(slug: str, clip: dict, *, start_url: str = "", end_url: str =
     ``references`` is a list of ``{type, url?|bytes?}`` — multiple reference images
     (as PNG ``bytes`` uploaded first), videos and audio (as URLs / creation ids).
     They become the MCP ``references`` array (image/video/character/style/audio/…).
+
+    Authorizes on demand (browser sign-in from the node) if there is no usable
+    token — no separate script needed.
     """
-    _require_mcp()
-    if not has_tokens():
-        raise MCPAuthError(
-            "Magnific MCP not authorized. Run 'python authorize_magnific.py' in the "
-            "ComfyUI-Magnific folder once to sign in."
-        )
-    return _run(lambda: _with_session(
+    return _run_authorized(
         lambda s: _op_video(s, slug, clip, start_url, end_url, start_bytes, end_bytes,
-                            references, poll_interval, max_wait, status_cb)
-    ))
+                            references, poll_interval, max_wait, status_cb),
+        status_cb,
+    )
 
 
 def download_to_output(url: str, prefix: str, ext_hint: str = ".mp4") -> str:

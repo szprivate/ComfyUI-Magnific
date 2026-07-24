@@ -1,15 +1,16 @@
 #!/usr/bin/env python
-"""One-time Magnific MCP OAuth sign-in for the MagnificMCPVideo node.
+"""OPTIONAL Magnific MCP OAuth sign-in for the MagnificMCPVideo node.
 
-Run this ONCE from the ComfyUI-Magnific folder, using the same Python that runs
-ComfyUI (so `mcp` is available there):
+You normally don't need this: the node authorizes on demand — its first run opens
+your browser automatically. Use this script only to pre-authorize from a terminal
+(e.g. before a long/expensive generation). Run it from the ComfyUI-Magnific folder
+with the same Python that runs ComfyUI (so `mcp` is available):
 
     python authorize_magnific.py
 
 It opens your browser to sign in to Magnific, captures the redirect on
 http://localhost:8207/callback, and stores the OAuth tokens in ./.mcp_tokens/
 (gitignored). The node then connects silently and refreshes the token as needed.
-Re-run this if the node ever reports it needs re-authorization.
 """
 import sys
 from pathlib import Path
