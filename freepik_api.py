@@ -499,6 +499,30 @@ def save_url_to_output(client: MagnificClient, url: str, prefix: str, ext_hint: 
     return str(dest)
 
 
+def output_media_preview(path: str, key: str = "images") -> dict:
+    """Build the ComfyUI UI payload that previews a saved file inline.
+
+    Mirrors ``comfy_api.latest.ui.PreviewVideo`` — ``{key: [{filename, subfolder,
+    type}], "animated": (True,)}`` — so an OUTPUT_NODE shows the generated video (or
+    audio) in the node itself, not just a wire. *path* must live under ComfyUI's
+    output directory (where ``save_url_to_output`` writes it).
+    """
+    try:
+        import folder_paths  # type: ignore
+
+        out_dir = folder_paths.get_output_directory()
+    except Exception:  # noqa: BLE001 — outside ComfyUI (tests)
+        out_dir = str(_PACK_DIR / "output")
+    filename = os.path.basename(path)
+    try:
+        rel = os.path.relpath(os.path.dirname(path), out_dir)
+        subfolder = "" if rel in (".", "") else rel.replace("\\", "/")
+    except Exception:  # noqa: BLE001
+        subfolder = ""
+    return {key: [{"filename": filename, "subfolder": subfolder, "type": "output"}],
+            "animated": (True,)}
+
+
 def comfy_interrupt_checker() -> Callable[[], None]:
     """Return a callable that raises if the user pressed Cancel in ComfyUI.
 

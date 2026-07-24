@@ -29,9 +29,11 @@ Every generation endpoint is **asynchronous**: the node submits a task, polls
 then downloads the result. Images come back as ComfyUI `IMAGE` tensors; video and
 audio are saved into your ComfyUI `output/` folder.
 
-The three video nodes output a native ComfyUI **`VIDEO`** (first output) that wires
-straight into **Save Video** / **Preview Video** (and VideoHelperSuite), alongside
-the `video_path` (the saved file) and `video_url` (the remote source) strings.
+The three video nodes **show the generated video inline** (a preview in the node)
+and also output a native ComfyUI **`VIDEO`** (first output) that wires straight into
+**Save Video** / **Preview Video** (and VideoHelperSuite), alongside the `video_path`
+(saved file) and `video_url` (remote source) strings. A running generation can be
+**cancelled from ComfyUI** — the poll loop honours the Cancel button within ~1s.
 
 ## Install
 

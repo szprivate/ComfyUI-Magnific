@@ -24,7 +24,9 @@ import base64
 import sys
 from pathlib import Path
 
-from comfy_api.latest import io, InputImpl
+import os
+
+from comfy_api.latest import io, InputImpl, ui
 
 # Import the pack-root mcp_client / freepik_api whether loaded as a package or not.
 _PACK_DIR = Path(__file__).resolve().parent.parent
@@ -189,7 +191,18 @@ class MagnificMCPVideo(io.ComfyNode):
             poll_interval=poll_interval, max_wait=max_wait_seconds, status_cb=_status,
         )
         video_path = mcp_client.download_to_output(urls[0], prefix=f"magnific_mcp_{slug}", ext_hint=".mp4")
-        return io.NodeOutput(InputImpl.VideoFromFile(video_path), video_path, "\n".join(urls))
+        # Inline preview so the generated video shows in the node (not just a wire).
+        try:
+            import folder_paths
+            out_dir = folder_paths.get_output_directory()
+            rel = os.path.relpath(os.path.dirname(video_path), out_dir)
+            subfolder = "" if rel in (".", "") else rel.replace("\\", "/")
+        except Exception:  # noqa: BLE001
+            subfolder = ""
+        preview = ui.PreviewVideo([ui.SavedResult(os.path.basename(video_path), subfolder,
+                                                  io.FolderType.output)])
+        return io.NodeOutput(InputImpl.VideoFromFile(video_path), video_path, "\n".join(urls),
+                             ui=preview)
 
 
 NODE_CLASS_MAPPINGS = {"MagnificMCPVideo": MagnificMCPVideo}

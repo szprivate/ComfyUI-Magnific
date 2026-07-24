@@ -345,7 +345,7 @@ async def _await_new_video_identifier(session, previous: Optional[str],
             return cur
         if status_cb:
             status_cb("queued — locating creation")
-        await asyncio.sleep(3.0)
+        await _sleep_cancellable(3.0)
     # Last resort: whatever is newest now (may still be the just-submitted one).
     return await _latest_video_identifier(session)
 
@@ -427,6 +427,33 @@ async def _upload_image(session, png_bytes: bytes, status_cb) -> str:
     return ident
 
 
+def _check_interrupt():
+    """Raise ComfyUI's InterruptProcessingException if the user pressed Cancel.
+
+    No-op outside a ComfyUI runtime. Because the MCP generation runs in a worker
+    thread (see ``_run``) while ComfyUI's node execution blocks on its result,
+    checking the global interrupt flag here lets the native Cancel button abort the
+    long poll — the exception propagates back out to ComfyUI as a cancellation.
+    """
+    try:
+        import comfy.model_management as mm  # type: ignore
+    except Exception:  # noqa: BLE001
+        return
+    mm.throw_exception_if_processing_interrupted()
+
+
+async def _sleep_cancellable(seconds: float):
+    """``asyncio.sleep`` in <=1s steps, checking the interrupt flag between, so a
+    cancel is honoured within ~1s instead of only after a full poll interval."""
+    end = time.time() + max(0.0, seconds)
+    while True:
+        _check_interrupt()
+        remaining = end - time.time()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(1.0, remaining))
+
+
 async def _op_video(session, slug, clip, start_url, end_url, start_bytes, end_bytes,
                     references, poll_interval, max_wait, status_cb):
     # Resolve keyframes: a URL wins; otherwise upload the tensor bytes to a creation.
@@ -452,6 +479,7 @@ async def _op_video(session, slug, clip, start_url, end_url, start_bytes, end_by
     if ref_items:
         clip["references"] = (clip.get("references") or []) + ref_items
 
+    _check_interrupt()  # allow cancel before we spend a generation
     # Snapshot the newest video id *before* submitting so we can detect the new one.
     pre_ident = await _latest_video_identifier(session)
 
@@ -473,7 +501,7 @@ async def _op_video(session, slug, clip, start_url, end_url, start_bytes, end_by
         status_cb(f"queued {ident}")
     deadline = time.time() + max_wait
     while time.time() < deadline:
-        await asyncio.sleep(poll_interval)
+        await _sleep_cancellable(poll_interval)  # honours ComfyUI Cancel between polls
         t2, j2, _e2 = await _call(session, "creations_get", {"creationIdentifier": ident})
         # creations_get replies key:value text (or json/structuredContent) — take the
         # view that actually carries a status/url.

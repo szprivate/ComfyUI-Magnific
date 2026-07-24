@@ -190,7 +190,9 @@ class MagnificVideoGenerate:
         )
         video_path = save_url_to_output(client, urls[0], prefix=f"magnific_{model}", ext_hint=".mp4")
         from comfy_api.input_impl import VideoFromFile  # lazy: only when a video is produced
-        return (VideoFromFile(video_path), video_path, "\n".join(urls))
+        from freepik_api import output_media_preview
+        return {"ui": output_media_preview(video_path),
+                "result": (VideoFromFile(video_path), video_path, "\n".join(urls))}
 
 
 NODE_CLASS_MAPPINGS = {"MagnificVideoGenerate": MagnificVideoGenerate}
